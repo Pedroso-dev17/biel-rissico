@@ -1,0 +1,2519 @@
+Build a custom "Swirl" cursor effect (a trail-class cursor) in vanilla JS + CSS, no libraries.
+
+A stroked canvas spline through the last N pointer samples, tapering to nothing at the tail. Midpoint quadratics keep it smooth with no maths library.
+
+How it works: Buffer the last N pointer samples and stroke a midpoint-quadratic spline through them on a canvas, tapering the width to zero at the tail.
+
+Parameters:
+- Samples: 40
+- Head width: 15px
+- Opacity: 0.8
+- Colour: gradient #FFFFFF → #5B9BF6 @ 90°
+
+Accessibility (required):
+- Never hide the native cursor: no `cursor: none` (and no `cursor: url(...)` replacing it) anywhere. The system arrow stays visible and keeps its hover/text/pointer states.
+- Render the custom cursor as an additive overlay: position: fixed, pointer-events: none, aria-hidden="true", on top of the page — it must never intercept clicks, hovers or focus.
+- Respect prefers-reduced-motion: reduce — don't mount the animated effect (or show only a static, non-animated version); the native cursor already covers the need.
+- Disable it on touch / coarse pointers: only mount when matchMedia("(hover: hover) and (pointer: fine)") matches, and re-check on change.
+
+Track the pointer on a single rAF loop, size any canvas to devicePixelRatio (capped at 2), and clean up listeners on teardown.
+"Interactive" (for any hover reaction) means the element under the pointer matches `a, button, input` via closest().
+
+Reference frame (the tool's preview box when this prompt was copied — a REFERENCE, not a size to reproduce):
+- Build the effect responsive: size the canvas/element to whatever container it is mounted in — a full-screen background, a hero, a card — and recompute on resize. Do NOT hard-code the numbers below as the component's size.
+- They tell you the scale the look was judged at, so size-dependent values (cell sizes, point sizes, radii, grain) can be scaled to the real container, and so a render at exactly this size can be compared 1:1 with the preview.
+- Frame: 496×544 CSS px (portrait, ≈1:1.1).
+- Canvas: same box; backing store 496×544 px at devicePixelRatio 1.
+- Layout: the effect layer and its canvas cover the whole demo surface (full-bleed); pointer coordinates are relative to that surface.
+- Page/host background behind the effect: #0d0d0d.
+- Backdrop: a soft radial wash over the background — radial-gradient(120% 90% at 50% 0%, color-mix(in srgb, #f5f5f5 5%, <background>), <background> 70%).
+
+
+Rebuild this GPU particle field 1:1 — archetype "Cosmic wave" (`cosmicSheet`), seed 1690455487, 250,000 particles. Three.js r158 (GLSL1 ShaderMaterial), a single THREE.Points cloud + 2,600 ambient dust points, bloom post.
+
+The form and the look ARE the code below — port generators.js, engine.ts and worker.ts verbatim (keep every constant, the RNG call order and the shaders). generate(kind, seed, count) is deterministic in all three inputs: the same "cosmicSheet" + 1690455487 + 250000 reproduce this exact form.
+
+## Exact inputs
+```json
+{
+  "form": {
+    "kind": "cosmicSheet",
+    "seed": 1690455487
+  },
+  "settings": {
+    "count": 250000,
+    "size": 1.95,
+    "speed": 0.45,
+    "opacity": 0.7,
+    "bloomStrength": 0.6,
+    "bloomRadius": 0.08,
+    "bloomThreshold": 0.21,
+    "colorA": "#fff025",
+    "colorB": "#2f2b32",
+    "autorotate": false
+  }
+}
+```
+(`settings` is the ParticleFieldSettings object the engine takes — the engine's `import type { ParticleFieldSettings } from "@/data/particle-field-presets"` is exactly these keys.)
+
+## Frame & camera
+- Size: the WebGL canvas fills whatever container you mount it in (CSS 100% × 100%, e.g. a full-screen background) and resizes with it. Point size scales with the container HEIGHT (uScale below), so the form keeps the same look at any size. The tool's preview was a portrait panel (≈ 518×790 CSS px on desktop) — the reference frame below is only for comparing a render at that exact size.
+Reference frame (the tool's preview box when this prompt was copied — a REFERENCE, not a size to reproduce):
+- Build the effect responsive: size the canvas/element to whatever container it is mounted in — a full-screen background, a hero, a card — and recompute on resize. Do NOT hard-code the numbers below as the component's size.
+- They tell you the scale the look was judged at, so size-dependent values (cell sizes, point sizes, radii, grain) can be scaled to the real container, and so a render at exactly this size can be compared 1:1 with the preview.
+- Frame: 1350×682 CSS px (landscape, ≈1.98:1 (≈2:1)).
+- Canvas: same box; backing store 1350×682 px at devicePixelRatio 1.
+- Layout: the effect fills the frame edge-to-edge (full-bleed, no letterboxing).
+- renderer.setPixelRatio(min(devicePixelRatio, 2)); setSize(cssW, cssH); composer + bloom sized the same; clear colour #000000 (opaque black background, no CSS behind).
+- PerspectiveCamera(fov 40°, aspect cssW/cssH, near 0.05, far 100) at (0, 0, 4.8) looking at the origin. OrbitControls: damping 0.06, pan off, distance 1.8–12, rotateSpeed 0.7.
+- Framing: normalize() recentres the structure on its robust (2nd–98th percentile) midpoint and scales it so the 97th-percentile particle radius = 1.25 world units (ambient layers excluded). It also derives `gain` (0.78–1.15) from silhouette coverage.
+
+## Point size (vertex shader)
+- px = uSize × aR.x × uScale / −mvPosition.z, with uSize = size (1.95) and uScale = dpr × cssHeight × 0.0045 (so points scale with the frame height, not width). aR.x = layer size × (0.45 + s³), s ∈ [0,1) per particle, × a per-form grain R(0.85, 1.2).
+- If px < 2: alpha × px²/4 and px = 2. gl_PointSize = px. Sprite: round, discard d > 0.5, a = smoothstep(0.5, 0, d); a = a²·(0.6 + 0.4a).
+
+## Colour
+- Per particle vMix (0‥1) comes baked from the structure: the layout texture's 4th channel at the particle's position + its own mix offset (aO.w; free points store it in aU.y). One of five colour layouts is rolled per seed (70% as authored, else inverted / radial / vertical / radial bands — remix()).
+- Fragment: colour = mix(#fff025, #2f2b32, smoothstep(0, 1, vMix)); alpha = sprite × vAlpha × uOpacity. AdditiveBlending, depthTest off, depthWrite off.
+- uOpacity = gain × opacity (0.7) × clamp(√(160000 / count), 0.3, 2.2) (= 0.8 at 250,000) × 0.8.
+
+## Post
+- EffectComposer: RenderPass → UnrealBloomPass(resolution cssW×cssH, strength 0.6, radius 0.08, threshold 0.21) → ShaderPass tone curve c = 1 − exp(−c × 1.35) + film grain (±0.5/255 hash) → OutputPass.
+
+## Motion — flow vs rotation
+- Engine time advances time += dt × speed (0.45), dt = min(frame Δ, 0.05 s). Everything below runs on that time.
+- Flow: curve/grid particles travel along their row: u = fract(u0 + du × time) (du = per-layer speed × (1 ± speedVar), signed by direction); grid particles also sway v by vAmp·sin(0.5·time + phase); free points drift on sines. Particles with the fade flag fade in over the first 7% and out over the last 10% of u.
+- Wobble: position += snoise3(p·0.8 + (0, 0.07·time, 0.04·time)) × wobble; optional radial pulse p *= 1 + pulse·0.035·sin(5|p| − 1.4·time).
+- Rotation: the form's spin group turns about Y at motion.spin rad/s × speed; a tilt group holds motion.tilt (Euler XYZ, slerped in during the 2.6 s morph). For this seed: spin 0.0411 rad/s (→ 0.0185 rad/s at 0.45×), wobble 0.0331, pulse 0, tilt [-0.1511, -0.2271, 0.0238].
+- Auto-rotate (OrbitControls, camera orbit): OFF (default); when on, autoRotateSpeed = 0.35 × speed, frame-based (three r158: 2π/3600 × autoRotateSpeed rad per update) → one orbit ≈ 381 s at 60 fps.
+
+## Host (exact — "use client" leaf, three/engine imported dynamically)
+```js
+import { ParticleStudio } from "./engine";
+
+const DPR_CAP = 2;
+// container: the preview frame (the canvas is position:absolute; inset:0; width/height 100%).
+function mount(container, canvas, SETTINGS, FORM) {
+  const studio = new ParticleStudio(canvas, { ...SETTINGS });
+  const resize = () => {
+    const w = container.clientWidth, h = container.clientHeight;
+    if (!w || !h) return;
+    studio.resize(w, h, Math.min(window.devicePixelRatio || 1, DPR_CAP)); // CSS px + dpr
+  };
+  resize();
+  new ResizeObserver(resize).observe(container);
+  // First form: particles "gather" in from a wide sphere (scale 4), morph 2.6 s.
+  studio.showForm(FORM.kind, FORM.seed, "gather");
+  let playing = true, last = performance.now();
+  new IntersectionObserver(([e]) => { playing = e.isIntersecting; last = performance.now(); }, { threshold: 0.01 }).observe(container);
+  const tick = (now) => {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    if (playing) studio.renderFrame(dt);
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+  // Later: new seed/archetype → studio.showForm(kind, seed, "morph");
+  // count change → studio.setCount(n); studio.showForm(kind, seed, "implode").
+  // prefers-reduced-motion: studio.setSpeed(Math.min(speed, 0.12)).
+}
+```
+
+## generators.js — the "cosmicSheet" generator, verbatim (core RNG/noise/layout/fill/normalize + forms file; ARCHETYPES narrowed to this archetype)
+```js
+// ── src/lib/particle-field/core.ts
+
+// @ts-nocheck
+// Particle Field generation engine.
+// Do NOT hand-edit beyond the documented adaptations.
+// Layout core. A form is a set of curves and surface grids baked into a float texture
+// (TEX_W samples per row), plus free points. Each particle stores where it lives on that
+// structure and how fast it travels along it; the shader moves it continuously.
+//
+// Per-particle attributes (vec4 each):
+//   aL: row0, rows, closed, mode (0 curve, 1 grid, 2 free)
+//   aU: u0, v0 | mix(free), du | drift speed(free), vAmp | drift amp(free)
+//   aO: offset xyz (free: absolute position), mix offset
+//   aR: size, phase, delay, fade-at-ends flag
+
+export const TEX_W = 256;
+
+const MAX_ROWS = 4000;
+
+export function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// ── Seeded 3D simplex noise ────────────────────────────────────────────────
+const GRAD3 = new Float32Array([1,1,0, -1,1,0, 1,-1,0, -1,-1,0, 1,0,1, -1,0,1, 1,0,-1, -1,0,-1, 0,1,1, 0,-1,1, 0,1,-1, 0,-1,-1]);
+
+const F3 = 1 / 3, G3 = 1 / 6;
+
+export function makeNoise(rng) {
+  const p = new Uint8Array(256);
+  for (let i = 0; i < 256; i++) p[i] = i;
+  for (let i = 255; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); const t = p[i]; p[i] = p[j]; p[j] = t; }
+  const perm = new Uint8Array(512), pm12 = new Uint8Array(512);
+  for (let i = 0; i < 512; i++) { perm[i] = p[i & 255]; pm12[i] = perm[i] % 12; }
+
+  function n3(x, y, z) {
+    const s = (x + y + z) * F3;
+    const i = Math.floor(x + s), j = Math.floor(y + s), k = Math.floor(z + s);
+    const t = (i + j + k) * G3;
+    const x0 = x - (i - t), y0 = y - (j - t), z0 = z - (k - t);
+    let i1, j1, k1, i2, j2, k2;
+    if (x0 >= y0) {
+      if (y0 >= z0) { i1 = 1; j1 = 0; k1 = 0; i2 = 1; j2 = 1; k2 = 0; }
+      else if (x0 >= z0) { i1 = 1; j1 = 0; k1 = 0; i2 = 1; j2 = 0; k2 = 1; }
+      else { i1 = 0; j1 = 0; k1 = 1; i2 = 1; j2 = 0; k2 = 1; }
+    } else {
+      if (y0 < z0) { i1 = 0; j1 = 0; k1 = 1; i2 = 0; j2 = 1; k2 = 1; }
+      else if (x0 < z0) { i1 = 0; j1 = 1; k1 = 0; i2 = 0; j2 = 1; k2 = 1; }
+      else { i1 = 0; j1 = 1; k1 = 0; i2 = 1; j2 = 1; k2 = 0; }
+    }
+    const x1 = x0 - i1 + G3, y1 = y0 - j1 + G3, z1 = z0 - k1 + G3;
+    const x2 = x0 - i2 + 2 * G3, y2 = y0 - j2 + 2 * G3, z2 = z0 - k2 + 2 * G3;
+    const x3 = x0 - 1 + 3 * G3, y3 = y0 - 1 + 3 * G3, z3 = z0 - 1 + 3 * G3;
+    const ii = i & 255, jj = j & 255, kk = k & 255;
+    let n = 0, tt, g;
+    tt = 0.6 - x0 * x0 - y0 * y0 - z0 * z0;
+    if (tt > 0) { g = pm12[ii + perm[jj + perm[kk]]] * 3; tt *= tt; n += tt * tt * (GRAD3[g] * x0 + GRAD3[g + 1] * y0 + GRAD3[g + 2] * z0); }
+    tt = 0.6 - x1 * x1 - y1 * y1 - z1 * z1;
+    if (tt > 0) { g = pm12[ii + i1 + perm[jj + j1 + perm[kk + k1]]] * 3; tt *= tt; n += tt * tt * (GRAD3[g] * x1 + GRAD3[g + 1] * y1 + GRAD3[g + 2] * z1); }
+    tt = 0.6 - x2 * x2 - y2 * y2 - z2 * z2;
+    if (tt > 0) { g = pm12[ii + i2 + perm[jj + j2 + perm[kk + k2]]] * 3; tt *= tt; n += tt * tt * (GRAD3[g] * x2 + GRAD3[g + 1] * y2 + GRAD3[g + 2] * z2); }
+    tt = 0.6 - x3 * x3 - y3 * y3 - z3 * z3;
+    if (tt > 0) { g = pm12[ii + 1 + perm[jj + 1 + perm[kk + 1]]] * 3; tt *= tt; n += tt * tt * (GRAD3[g] * x3 + GRAD3[g + 1] * y3 + GRAD3[g + 2] * z3); }
+    return 32 * n;
+  }
+  function fbm(x, y, z, oct = 3) {
+    let a = 0.5, f = 1, s = 0;
+    for (let o = 0; o < oct; o++) { s += a * n3(x * f, y * f, z * f); f *= 2.03; a *= 0.5; }
+    return s;
+  }
+  const vec = [0, 0, 0];
+  function field(x, y, z) {
+    vec[0] = n3(x, y, z);
+    vec[1] = n3(y + 31.4, z - 17.1, x + 9.2);
+    vec[2] = n3(z + 71.3, x - 3.3, y + 47.7);
+    return vec;
+  }
+  return { n3, fbm, field };
+}
+
+// ── Math helpers ───────────────────────────────────────────────────────────
+export const TAU = Math.PI * 2;
+
+export const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+export const lerp = (a, b, t) => a + (b - a) * t;
+
+export const R = (rng, a, b) => a + (b - a) * rng();
+
+export const int = (rng, a, b) => Math.floor(a + (b - a + 1) * rng());
+
+export const sgn = (rng) => (rng() < 0.5 ? -1 : 1);
+
+export function gauss(rng) {
+  let u = 0; while (u === 0) u = rng();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(TAU * rng());
+}
+
+export function unitVec(rng, out = [0, 0, 0]) {
+  const z = rng() * 2 - 1, a = rng() * TAU, r = Math.sqrt(1 - z * z);
+  out[0] = r * Math.cos(a); out[1] = z; out[2] = r * Math.sin(a);
+  return out;
+}
+
+// Random rotation matrix (row-major 3x3)
+export function randRot(rng) {
+  const a = rng() * TAU, b = Math.acos(rng() * 2 - 1), c = rng() * TAU;
+  const ca = Math.cos(a), sa = Math.sin(a), cb = Math.cos(b), sb = Math.sin(b), cc = Math.cos(c), sc = Math.sin(c);
+  return [
+    ca * cc - sa * cb * sc, -ca * sc - sa * cb * cc, sa * sb,
+    sa * cc + ca * cb * sc, -sa * sc + ca * cb * cc, -ca * sb,
+    sb * sc, sb * cc, cb,
+  ];
+}
+
+export function applyRot(m, o) {
+  const x = o[0], y = o[1], z = o[2];
+  o[0] = m[0] * x + m[1] * y + m[2] * z;
+  o[1] = m[3] * x + m[4] * y + m[5] * z;
+  o[2] = m[6] * x + m[7] * y + m[8] * z;
+  return o;
+}
+
+// ── Layout builder ─────────────────────────────────────────────────────────
+// Resamples a row so its samples are evenly spaced along the curve: particles then spread
+// evenly and travel at a steady speed however unevenly the source curve was parameterized.
+function arcResample(row, closed) {
+  const n = TEX_W, segs = closed ? n : n - 1;
+  const cum = new Float32Array(segs + 1);
+  for (let i = 0; i < segs; i++) {
+    const a = i * 4, b = ((i + 1) % n) * 4;
+    cum[i + 1] = cum[i] + Math.hypot(row[b] - row[a], row[b + 1] - row[a + 1], row[b + 2] - row[a + 2]);
+  }
+  const total = cum[segs];
+  if (!(total > 1e-6)) return row;
+  const out = new Float32Array(n * 4);
+  let j = 0;
+  for (let k = 0; k < n; k++) {
+    const target = (k / (closed ? n : n - 1)) * total;
+    while (j < segs - 1 && cum[j + 1] < target) j++;
+    const f = cum[j + 1] > cum[j] ? (target - cum[j]) / (cum[j + 1] - cum[j]) : 0;
+    const a = j * 4, b = ((j + 1) % n) * 4;
+    for (let c = 0; c < 4; c++) out[k * 4 + c] = row[a + c] + (row[b + c] - row[a + c]) * f;
+  }
+  return out;
+}
+
+export function makeLayout(rng, nz) {
+  const rows = [];
+  const layers = [];
+  const tmp = [0, 0, 0, 0.5];
+
+  function rowLength(row, closed) {
+    let len = 0;
+    for (let i = 4; i < TEX_W * 4; i += 4) len += Math.hypot(row[i] - row[i - 4], row[i + 1] - row[i - 3], row[i + 2] - row[i - 2]);
+    if (closed) len += Math.hypot(row[0] - row[TEX_W * 4 - 4], row[1] - row[TEX_W * 4 - 3], row[2] - row[TEX_W * 4 - 2]);
+    return Math.max(len, 1e-3);
+  }
+
+  const L = {
+    rng, nz, rows, layers,
+    motion: { spin: 0.08, wobble: 0.03, pulse: 0, tilt: [0, 0, 0] },
+    full: () => rows.length >= MAX_ROWS - 64,
+
+    // fn(u, out) writes x,y,z and optional mix into out
+    curve(fn, closed = false) {
+      const row = new Float32Array(TEX_W * 4);
+      const n = closed ? TEX_W : TEX_W - 1;
+      for (let i = 0; i < TEX_W; i++) {
+        tmp[3] = 0.5;
+        fn(i / n, tmp);
+        row[i * 4] = tmp[0]; row[i * 4 + 1] = tmp[1]; row[i * 4 + 2] = tmp[2]; row[i * 4 + 3] = tmp[3];
+      }
+      const even = arcResample(row, closed);
+      rows.push(even);
+      return { row: rows.length - 1, len: rowLength(even, closed), closed };
+    },
+
+    // pts: Float32Array(TEX_W*3), sampled at i/(TEX_W-1) (or i/TEX_W when closed)
+    polyline(pts, closed = false, mixFn = null) {
+      return L.curve((u, o) => {
+        const i = closed ? Math.round(u * TEX_W) % TEX_W : Math.round(u * (TEX_W - 1));
+        o[0] = pts[i * 3]; o[1] = pts[i * 3 + 1]; o[2] = pts[i * 3 + 2];
+        o[3] = mixFn ? mixFn(u, i) : u;
+      }, closed);
+    },
+
+    // Curve through a TEX_W polyline, with fn(x, y, z, out) mapping each sample to world space.
+    mapped(poly, closed, fn) {
+      return L.curve((u, o) => {
+        const i = closed ? Math.round(u * TEX_W) % TEX_W : Math.round(u * (TEX_W - 1));
+        fn(poly[i * 3], poly[i * 3 + 1], poly[i * 3 + 2], o);
+      }, closed);
+    },
+
+    // fn(u, v, out) writes position/mix and may return a sampling density 0..1
+    grid(fn, nRows, closed = false) {
+      const row0 = rows.length;
+      const n = closed ? TEX_W : TEX_W - 1;
+      const dens = new Float32Array(nRows * TEX_W);
+      let hasDens = false;
+      for (let j = 0; j < nRows; j++) {
+        const v = j / (nRows - 1);
+        const row = new Float32Array(TEX_W * 4);
+        for (let i = 0; i < TEX_W; i++) {
+          tmp[3] = 0.5;
+          const d = fn(i / n, v, tmp);
+          row[i * 4] = tmp[0]; row[i * 4 + 1] = tmp[1]; row[i * 4 + 2] = tmp[2]; row[i * 4 + 3] = tmp[3];
+          if (d !== undefined) { dens[j * TEX_W + i] = d; hasDens = true; } else dens[j * TEX_W + i] = 1;
+        }
+        rows.push(row);
+      }
+      if (hasDens) {
+        let mx = 0;
+        for (let k = 0; k < dens.length; k++) mx = Math.max(mx, dens[k]);
+        if (mx > 0) for (let k = 0; k < dens.length; k++) dens[k] /= mx;
+      }
+      return { row0, rows: nRows, len: rowLength(rows[row0 + (nRows >> 1)], closed), closed, dens: hasDens ? dens : null };
+    },
+
+    addCurves(curves, o = {}) { if (curves.length) layers.push({ type: 0, curves, ...o }); },
+    addGrid(g, o = {}) { layers.push({ type: 1, grids: Array.isArray(g) ? g : [g], ...o }); },
+    addFree(gen, o = {}) { layers.push({ type: 2, gen, ...o }); },
+  };
+  return L;
+}
+
+// ── Particle distribution ──────────────────────────────────────────────────
+export function fill(L, N, rng) {
+  const H = Math.max(1, L.rows.length);
+  const tex = new Float32Array(TEX_W * H * 4);
+  L.rows.forEach((r, i) => tex.set(r, i * TEX_W * 4));
+  const aL = new Float32Array(N * 4), aU = new Float32Array(N * 4), aO = new Float32Array(N * 4), aR = new Float32Array(N * 4);
+  const ambient = new Uint8Array(N); // background layers that should not drive the framing
+  const layers = L.layers;
+  const total = layers.reduce((s, l) => s + (l.weight ?? 1), 0);
+  const tmp = [0, 0, 0, 0.5];
+  let idx = 0;
+
+  layers.forEach((ly, li) => {
+    const cnt = li === layers.length - 1 ? N - idx : Math.min(N - idx, Math.round((N * (ly.weight ?? 1)) / total));
+    const speed = ly.speed ?? 0.2, speedVar = ly.speedVar ?? 0.35, thick = ly.thick ?? 0.01;
+    const size = ly.size ?? 1, mixJit = ly.mixJit ?? 0.12, dir = ly.dir ?? 1;
+    let cum = null, signs = null;
+    if (ly.type === 0) {
+      cum = new Float32Array(ly.curves.length);
+      let s = 0;
+      ly.curves.forEach((c, k) => { s += c.len; cum[k] = s; });
+      if (ly.dirPerCurve) signs = ly.curves.map(() => (rng() < 0.5 ? -1 : 1));
+    }
+    for (let k = 0; k < cnt; k++, idx++) {
+      const i = idx, i4 = i * 4;
+      if (ly.ambient) ambient[i] = 1;
+      const s = rng();
+      aR[i4] = size * (0.45 + s * s * s * 1.0);
+      aR[i4 + 1] = rng();
+      aR[i4 + 2] = rng();
+      const sp = speed * (1 + (rng() * 2 - 1) * speedVar) * (dir === 0 ? (rng() < 0.5 ? -1 : 1) : dir);
+      const th = thick * Math.abs(gauss(rng)) ;
+      const ox = gauss(rng), oy = gauss(rng), oz = gauss(rng);
+      const ol = Math.hypot(ox, oy, oz) || 1;
+
+      if (ly.type === 0) {
+        const target = rng() * cum[cum.length - 1];
+        let lo = 0, hi = cum.length - 1;
+        while (lo < hi) { const m = (lo + hi) >> 1; if (cum[m] < target) lo = m + 1; else hi = m; }
+        const c = ly.curves[lo];
+        const u0 = ly.uDist ? ly.uDist(rng) : rng();
+        const dsp = sp * (signs ? signs[lo] : 1);
+        aL[i4] = c.row; aL[i4 + 1] = 1; aL[i4 + 2] = c.closed ? 1 : 0; aL[i4 + 3] = 0;
+        aU[i4] = u0; aU[i4 + 1] = 0; aU[i4 + 2] = dsp / c.len; aU[i4 + 3] = 0;
+        aO[i4] = (ox / ol) * th; aO[i4 + 1] = (oy / ol) * th; aO[i4 + 2] = (oz / ol) * th; aO[i4 + 3] = (rng() - 0.5) * mixJit;
+        aR[i4 + 3] = !c.closed && ly.fade !== false && dsp !== 0 ? 1 : 0;
+      } else if (ly.type === 1) {
+        const g = ly.grids[Math.floor(rng() * ly.grids.length)];
+        let u0, v0;
+        if (ly.useDens && g.dens) {
+          let best = -1;
+          for (let t = 0; t < 48; t++) {
+            const uu = rng(), vv = rng();
+            const d = g.dens[Math.round(vv * (g.rows - 1)) * TEX_W + Math.min(TEX_W - 1, Math.round(uu * (TEX_W - 1)))];
+            if (d > best) { best = d; u0 = uu; v0 = vv; }
+            if (rng() < d) { u0 = uu; v0 = vv; break; }
+          }
+        } else {
+          u0 = ly.uDist ? ly.uDist(rng) : rng();
+          v0 = ly.vDist ? ly.vDist(rng) : rng();
+        }
+        const du = (ly.duFn ? ly.duFn(u0, v0, sp) : sp) / g.len;
+        aL[i4] = g.row0; aL[i4 + 1] = g.rows; aL[i4 + 2] = g.closed ? 1 : 0; aL[i4 + 3] = 1;
+        aU[i4] = u0; aU[i4 + 1] = v0; aU[i4 + 2] = du; aU[i4 + 3] = (ly.vAmp ?? 0) * rng();
+        aO[i4] = (ox / ol) * th; aO[i4 + 1] = (oy / ol) * th; aO[i4 + 2] = (oz / ol) * th; aO[i4 + 3] = (rng() - 0.5) * mixJit;
+        aR[i4 + 3] = !g.closed && ly.fade !== false && du !== 0 ? 1 : 0;
+      } else {
+        tmp[3] = 0.5;
+        ly.gen(rng, tmp);
+        aL[i4 + 3] = 2;
+        aU[i4] = 0; aU[i4 + 1] = clamp01(tmp[3] + (rng() - 0.5) * mixJit);
+        aU[i4 + 2] = (ly.driftSpeed ?? 0.3) * (0.5 + rng());
+        aU[i4 + 3] = (ly.driftAmp ?? 0.02) * (0.3 + rng());
+        aO[i4] = tmp[0]; aO[i4 + 1] = tmp[1]; aO[i4 + 2] = tmp[2]; aO[i4 + 3] = 0;
+        aR[i4 + 3] = 0;
+      }
+    }
+  });
+  return { tex, H, aL, aU, aO, aR, ambient };
+}
+
+// ── Evaluation (mirrors the vertex shader) ─────────────────────────────────
+function rowS(tex, row, u, closed, out, add) {
+  let i0, i1, f;
+  if (closed) {
+    const x = (u - Math.floor(u)) * TEX_W;
+    i0 = Math.min(TEX_W - 1, Math.floor(x)); f = x - i0; i1 = (i0 + 1) % TEX_W;
+  } else {
+    const x = Math.min(Math.max(u, 0), 1) * (TEX_W - 1);
+    i0 = Math.floor(x); f = x - i0; i1 = Math.min(i0 + 1, TEX_W - 1);
+  }
+  const a0 = (row * TEX_W + i0) * 4, a1 = (row * TEX_W + i1) * 4;
+  for (let c = 0; c < 4; c++) {
+    const v = tex[a0 + c] + (tex[a1 + c] - tex[a0 + c]) * f;
+    if (add) out[c] += v * add; else out[c] = v;
+  }
+}
+
+// out: [x, y, z, mix, alpha]
+export function evalParticle(F, i, t, out) {
+  const { tex, aL, aU, aO, aR } = F;
+  const i4 = i * 4;
+  const mode = aL[i4 + 3];
+  if (mode > 1.5) {
+    const tt = t * aU[i4 + 2], ph = aR[i4 + 1] * TAU, a = aU[i4 + 3];
+    out[0] = aO[i4] + Math.sin(tt + ph) * a;
+    out[1] = aO[i4 + 1] + Math.sin(tt * 0.83 + ph * 1.7 + 1.3) * a;
+    out[2] = aO[i4 + 2] + Math.sin(tt * 0.71 + ph * 2.3 + 2.1) * a;
+    out[3] = aU[i4 + 1];
+    out[4] = 1;
+    return out;
+  }
+  let u = aU[i4] + aU[i4 + 2] * t;
+  u -= Math.floor(u);
+  const ss = (e0, e1, x) => { const k = clamp01((x - e0) / (e1 - e0)); return k * k * (3 - 2 * k); };
+  out[4] = aR[i4 + 3] > 0.5 ? ss(0, 0.07, u) * (1 - ss(0.9, 1, u)) : 1;
+  const closed = aL[i4 + 2] > 0.5;
+  if (mode < 0.5) {
+    rowS(tex, aL[i4], u, closed, out, 0);
+  } else {
+    const rowsN = aL[i4 + 1];
+    const v = clamp01(aU[i4 + 1] + aU[i4 + 3] * Math.sin(t * 0.5 + aR[i4 + 1] * TAU));
+    const y = v * (rowsN - 1), j0 = Math.floor(y), g = y - j0, j1 = Math.min(j0 + 1, rowsN - 1);
+    rowS(tex, aL[i4] + j0, u, closed, out, 0);
+    for (let c = 0; c < 4; c++) out[c] *= 1 - g;
+    rowS(tex, aL[i4] + j1, u, closed, out, g);
+  }
+  out[0] += aO[i4]; out[1] += aO[i4 + 1]; out[2] += aO[i4 + 2]; out[3] += aO[i4 + 3];
+  return out;
+}
+
+// ── Post: global deformation + normalization ───────────────────────────────
+function forEachPoint(F, cb) {
+  const { tex, H, aL, aO } = F;
+  for (let i = 0; i < TEX_W * H * 4; i += 4) cb(tex, i);
+  const N = aL.length / 4;
+  for (let i = 0; i < N; i++) if (aL[i * 4 + 3] > 1.5) cb(aO, i * 4);
+}
+
+export function deform(F, rng) {
+  const k = R(rng, 0.4, 1.2) * sgn(rng), pinch = rng() < 0.35;
+  forEachPoint(F, (a, i) => {
+    const x = a[i], y = a[i + 1], z = a[i + 2];
+    if (pinch) {
+      const f = 1 - 0.3 * Math.exp(-y * y * 3) * Math.abs(k);
+      a[i] = x * f; a[i + 2] = z * f;
+    } else {
+      const an = y * k, c = Math.cos(an), s = Math.sin(an);
+      a[i] = x * c - z * s; a[i + 2] = x * s + z * c;
+    }
+  });
+}
+
+// Re-assigns the color blend by a spatial rule so the same structure can read very differently.
+export function remix(F, mode, freq) {
+  const f = (x, y, z, m) => {
+    const r = Math.hypot(x, y, z);
+    if (mode === 1) return 1 - m;
+    if (mode === 2) return clamp01(r / 1.35);
+    if (mode === 3) return clamp01(0.5 + y * 0.42);
+    if (mode === 4) return 0.5 + 0.5 * Math.sin(r * freq);
+    return m;
+  };
+  const { tex, H, aL, aU, aO } = F;
+  for (let i = 0; i < TEX_W * H * 4; i += 4) tex[i + 3] = f(tex[i], tex[i + 1], tex[i + 2], tex[i + 3]);
+  const N = aL.length / 4;
+  for (let i = 0; i < N; i++) {
+    const i4 = i * 4;
+    if (aL[i4 + 3] > 1.5) aU[i4 + 1] = f(aO[i4], aO[i4 + 1], aO[i4 + 2], aU[i4 + 1]);
+    else if (mode === 1) aO[i4 + 3] = -aO[i4 + 3];
+  }
+}
+
+export function normalize(F, target = 1.25) {
+  const N = F.aL.length / 4;
+  const step = Math.max(1, Math.floor(N / 5000));
+  const o = [0, 0, 0, 0, 0];
+  const xs = [], ys = [], zs = [];
+  for (let i = 0; i < N; i += step) {
+    if (F.ambient && F.ambient[i]) continue;
+    evalParticle(F, i, 0, o);
+    if (Number.isFinite(o[0] + o[1] + o[2])) { xs.push(o[0]); ys.push(o[1]); zs.push(o[2]); }
+  }
+  const med = (arr) => { const s = [...arr].sort((a, b) => a - b); return (s[Math.floor(s.length * 0.02)] + s[Math.floor(s.length * 0.98)]) / 2; };
+  const cx = med(xs), cy = med(ys), cz = med(zs);
+  const rad = xs.map((x, k) => Math.hypot(x - cx, ys[k] - cy, zs[k] - cz)).sort((a, b) => a - b);
+  const r97 = rad[Math.floor(rad.length * 0.97)] || 1;
+  const s = target / r97;
+  // Coverage of the silhouette: concentrated forms stack more additive light, so dim them.
+  const B = 48, occ = new Uint8Array(B * B);
+  for (let k = 0; k < xs.length; k++) {
+    const bx = Math.floor(((xs[k] - cx) * s / 1.6 + 1) * 0.5 * B), by = Math.floor(((ys[k] - cy) * s / 1.6 + 1) * 0.5 * B);
+    if (bx >= 0 && by >= 0 && bx < B && by < B) occ[by * B + bx] = 1;
+  }
+  let filled = 0;
+  for (let k = 0; k < occ.length; k++) filled += occ[k];
+  F.gain = Math.min(1.15, Math.max(0.78, Math.pow(filled / occ.length / 0.3, 0.35)));
+  const { tex, H, aL, aU, aO } = F;
+  for (let i = 0; i < TEX_W * H * 4; i += 4) {
+    tex[i] = (tex[i] - cx) * s; tex[i + 1] = (tex[i + 1] - cy) * s; tex[i + 2] = (tex[i + 2] - cz) * s;
+  }
+  for (let i = 0; i < N; i++) {
+    const i4 = i * 4;
+    if (aL[i4 + 3] > 1.5) {
+      aO[i4] = (aO[i4] - cx) * s; aO[i4 + 1] = (aO[i4 + 1] - cy) * s; aO[i4 + 2] = (aO[i4 + 2] - cz) * s;
+      aU[i4 + 3] *= s;
+    } else {
+      aO[i4] *= s; aO[i4 + 1] *= s; aO[i4 + 2] *= s;
+    }
+  }
+  // sanitize (attractors can occasionally spit NaN)
+  for (let i = 0; i < tex.length; i++) if (!Number.isFinite(tex[i])) tex[i] = 0;
+  for (let i = 0; i < aO.length; i++) if (!Number.isFinite(aO[i])) aO[i] = 0;
+}
+
+// ── src/lib/particle-field/forms-c.ts
+
+// ── Accents: optional extra layers that make a form feel like a scene ──────
+export function addAccent(L) {
+  const { rng } = L;
+  const kind = int(rng, 0, 3);
+  if (kind === 0) {
+    const n = int(rng, 2, 5), rings = [];
+    for (let k = 0; k < n; k++) {
+      const m = randRot(rng), rr = R(rng, 1.5, 2.1);
+      rings.push(L.curve((u, o) => { const a = u * TAU; o[0] = Math.cos(a) * rr; o[1] = 0; o[2] = Math.sin(a) * rr; applyRot(m, o); o[3] = 1; }, true));
+    }
+    L.addCurves(rings, { weight: 0.06, speed: 0.35, thick: 0.004, dirPerCurve: true });
+  } else if (kind === 1) {
+    L.addFree((r, o) => {
+      const v = unitVec(r), g = R(r, 1.6, 2.6);
+      o[0] = v[0] * g; o[1] = v[1] * g; o[2] = v[2] * g; o[3] = r();
+    }, { weight: 0.05, driftAmp: 0.12, driftSpeed: 0.2, size: 0.8 });
+  } else if (kind === 2) {
+    const sats = [];
+    const ns = int(rng, 3, 8);
+    for (let k = 0; k < ns; k++) { const v = unitVec(rng), g = R(rng, 1.5, 2); sats.push([v[0] * g, v[1] * g, v[2] * g, R(rng, 0.03, 0.08)]); }
+    L.addFree((r, o) => {
+      const s = sats[Math.floor(r() * sats.length)], v = unitVec(r), g = Math.abs(gauss(r)) * s[3];
+      o[0] = s[0] + v[0] * g; o[1] = s[1] + v[1] * g; o[2] = s[2] + v[2] * g; o[3] = 1;
+    }, { weight: 0.04, driftAmp: 0.02, size: 1.1 });
+  } else {
+    // a ring disc; density depends only on radius so its flow never smears the pattern
+    const disc = L.grid((u, v, o) => {
+      const a = u * TAU, rr = lerp(1.5, 2.2, v);
+      o[0] = Math.cos(a) * rr; o[1] = 0; o[2] = Math.sin(a) * rr; o[3] = v;
+      return 0.2 + 0.8 * Math.pow(Math.sin(v * Math.PI * 4), 8);
+    }, 32, true);
+    L.addGrid(disc, { weight: 0.07, useDens: true, speed: 0.3, thick: 0.005 });
+  }
+}
+
+// ── src/lib/particle-field/forms-d.ts
+
+// Stars scattered around a form; a few are larger so they read as bokeh.
+function starfield(L, weight, radius = 2.4) {
+  L.addFree((r, o) => {
+    const v = unitVec(r), g = radius * (0.35 + Math.cbrt(r()) * 0.65);
+    o[0] = v[0] * g; o[1] = v[1] * g * 0.7; o[2] = v[2] * g; o[3] = r();
+  }, { weight, driftAmp: 0.04, driftSpeed: 0.15, size: 1.1, mixJit: 0.3, ambient: true });
+}
+
+// ── Cosmic wave: a long silky sheet undulating through a starfield ────────
+export function cosmicSheet(L) {
+  const { rng, nz } = L;
+  const len = 3.8, waves = [];
+  for (let k = 0; k < 3; k++) waves.push([R(rng, 0.08, 0.35) / (k + 1), R(rng, 0.8, 2.5) * (k + 1), rng() * TAU]);
+  const tw = R(rng, -1.6, 1.6), W = R(rng, 0.35, 0.9), warp = R(rng, 0.05, 0.25);
+  const at = (u, s, o) => {
+    const x = (u - 0.5) * len;
+    let y = 0;
+    for (const [a, k, p] of waves) y += a * Math.sin(k * x + p);
+    const th = tw * x + 0.6 * Math.sin(x * 1.3 + waves[0][2]);
+    const wd = W * (0.35 + 0.65 * Math.sin(Math.PI * u)) * s;
+    let px = x, py = y + Math.sin(th) * wd, pz = Math.cos(th) * wd;
+    const f = nz.field(px * 0.9, py * 0.9, pz * 0.9);
+    px += f[0] * warp; py += f[1] * warp; pz += f[2] * warp;
+    o[0] = px; o[1] = py; o[2] = pz; o[3] = clamp01(0.5 + s * 0.5 + f[1] * 0.3);
+  };
+  const sheet = L.grid((u, v, o) => { at(u, v * 2 - 1, o); return 0.3 + 0.7 * Math.pow(Math.abs(v * 2 - 1), 4); }, 24, false);
+  const sp = R(rng, 0.2, 0.4) * sgn(rng);
+  L.addGrid(sheet, { weight: 0.42, useDens: true, speed: sp, thick: 0.012, vAmp: 0.02 });
+  const F = int(rng, 24, 70), fil = [];
+  for (let k = 0; k < F; k++) {
+    const s = R(rng, -1, 1), off = gauss(rng) * 0.03, ph = rng() * TAU;
+    fil.push(L.curve((u, o) => { at(u, s + Math.sin(u * 9 + ph) * 0.05, o); o[1] += off; }));
+  }
+  L.addCurves(fil, { weight: 0.3, speed: sp * 1.4, thick: 0.004 });
+  const tmp = [0, 0, 0, 0];
+  L.addFree((r, o) => {
+    at(r(), r() * 2 - 1, tmp);
+    const g = Math.abs(gauss(r)) * 0.12;
+    o[0] = tmp[0] + gauss(r) * g; o[1] = tmp[1] + gauss(r) * g; o[2] = tmp[2] + gauss(r) * g; o[3] = tmp[3];
+  }, { weight: 0.16, driftAmp: 0.04, size: 0.8 });
+  starfield(L, 0.12, 2.8);
+  L.motion = { spin: R(rng, 0.02, 0.05), wobble: R(rng, 0.03, 0.06), tilt: [R(rng, -0.3, 0.3), R(rng, -0.4, 0.4), R(rng, -0.25, 0.25)] };
+}
+
+// ── src/lib/particle-field/generators.ts
+
+// ARCHETYPES narrowed to the current archetype (entry verbatim).
+export const ARCHETYPES = {
+  cosmicSheet: { fn: cosmicSheet, label: 'Cosmic wave', noDeform: true, noAccent: true },
+};
+
+export function generate(kind, seed, N) {
+  const rng = mulberry32(seed);
+  const nz = makeNoise(mulberry32(seed * 7 + 13));
+  const L = makeLayout(rng, nz);
+  const arch = ARCHETYPES[kind];
+  arch.fn(L);
+  if (!arch.noAccent && rng() < 0.35) addAccent(L);
+  const F = fill(L, N, rng);
+  if (!arch.noDeform && rng() < 0.28) deform(F, rng);
+  normalize(F);
+  // Occasional alternative color layouts keep repeat visits of an archetype from looking identical.
+  const roll = rng();
+  const mode = roll < 0.7 ? 0 : roll < 0.8 ? 1 : roll < 0.87 ? 2 : roll < 0.94 ? 3 : 4;
+  if (mode) remix(F, mode, R(rng, 4, 12));
+  const grain = R(rng, 0.85, 1.2);
+  for (let i = 0; i < F.aR.length; i += 4) F.aR[i] *= grain;
+  return { ...F, motion: { label: arch.label, gain: F.gain, ...L.motion } };
+}
+```
+
+## worker.ts — verbatim
+```ts
+// @ts-nocheck
+// Particle Field generation engine.
+// Off-main-thread form generation. The engine falls back to main-thread `generate`
+// if the worker can't be constructed (see engine.ts).
+import { generate } from './generators';
+
+self.onmessage = (e) => {
+  const { id, kind, seed, count } = e.data;
+  const r = generate(kind, seed, count);
+  self.postMessage({ id, ...r }, [r.tex.buffer, r.aL.buffer, r.aU.buffer, r.aO.buffer, r.aR.buffer]);
+};
+
+```
+
+## engine.ts — the renderer, verbatim (shaders, camera, bloom, opacity law, motion)
+```ts
+import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { generate, evalParticle, TEX_W } from "./generators";
+import type { ParticleFieldSettings } from "@/data/particle-field-presets";
+
+/**
+ * The Particle Field render engine — a thin studio wrapper around the
+ * generation engine (see `core.ts` / `forms-*.ts` / `generators.ts`).
+ *
+ * A form is a set of curves + surface grids baked into a float texture; each
+ * particle stores where it lives on that structure and how fast it travels along
+ * it, and the shader moves it continuously — so the cloud *flows* rather than
+ * jitters. `generate(kind, seed, N)` (off-main-thread when a Worker is available)
+ * produces the buffers; `showForm` morphs from the current form into the new one.
+ *
+ * Adapted for our stack: three@0.158 (GLSL1 — the reference's `texelFetch` is
+ * replaced with a `texture2D` fetch on a Nearest-filtered float texture, so no
+ * three bump is needed); dark-only (no theme invert); colours come from the
+ * viewer's pickers rather than a per-form palette.
+ */
+
+const DPR_CAP = 2;
+const MORPH_TIME = 2.6;
+
+const NOISE_GLSL = /* glsl */ `
+vec3 mod289(vec3 x){return x - floor(x*(1.0/289.0))*289.0;}
+vec4 mod289(vec4 x){return x - floor(x*(1.0/289.0))*289.0;}
+vec4 permute(vec4 x){return mod289(((x*34.0)+10.0)*x);}
+vec4 taylorInvSqrt(vec4 r){return 1.79284291400159 - 0.85373472095314*r;}
+float snoise(vec3 v){
+  const vec2 C = vec2(1.0/6.0, 1.0/3.0);
+  const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+  vec3 i = floor(v + dot(v, C.yyy));
+  vec3 x0 = v - i + dot(i, C.xxx);
+  vec3 g = step(x0.yzx, x0.xyz);
+  vec3 l = 1.0 - g;
+  vec3 i1 = min(g.xyz, l.zxy);
+  vec3 i2 = max(g.xyz, l.zxy);
+  vec3 x1 = x0 - i1 + C.xxx;
+  vec3 x2 = x0 - i2 + C.yyy;
+  vec3 x3 = x0 - D.yyy;
+  i = mod289(i);
+  vec4 p = permute(permute(permute(i.z + vec4(0.0, i1.z, i2.z, 1.0)) + i.y + vec4(0.0, i1.y, i2.y, 1.0)) + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+  float n_ = 0.142857142857;
+  vec3 ns = n_ * D.wyz - D.xzx;
+  vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+  vec4 x_ = floor(j * ns.z);
+  vec4 y_ = floor(j - 7.0 * x_);
+  vec4 x = x_ * ns.x + ns.yyyy;
+  vec4 y = y_ * ns.x + ns.yyyy;
+  vec4 h = 1.0 - abs(x) - abs(y);
+  vec4 b0 = vec4(x.xy, y.xy);
+  vec4 b1 = vec4(x.zw, y.zw);
+  vec4 s0 = floor(b0)*2.0 + 1.0;
+  vec4 s1 = floor(b1)*2.0 + 1.0;
+  vec4 sh = -step(h, vec4(0.0));
+  vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy;
+  vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;
+  vec3 p0 = vec3(a0.xy, h.x);
+  vec3 p1 = vec3(a0.zw, h.y);
+  vec3 p2 = vec3(a1.xy, h.z);
+  vec3 p3 = vec3(a1.zw, h.w);
+  vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
+  p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
+  vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+  m = m * m;
+  return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+}
+vec3 snoiseVec(vec3 p){
+  return vec3(snoise(p), snoise(p.yzx + vec3(31.4, -17.1, 9.2)), snoise(p.zxy + vec3(71.3, -3.3, 47.7)));
+}`;
+
+interface GenData {
+  tex: Float32Array;
+  H: number;
+  aL: Float32Array;
+  aU: Float32Array;
+  aO: Float32Array;
+  aR: Float32Array;
+  motion: {
+    label: string;
+    gain: number;
+    spin: number;
+    wobble: number;
+    pulse: number;
+    tilt: [number, number, number];
+  };
+}
+
+/** Camera distance at rest, and the dolly limits the zoom buttons clamp to. */
+const HOME_DISTANCE = 4.8;
+const MIN_DISTANCE = 1.8;
+const MAX_DISTANCE = 12;
+/** Zoom-button dolly rate (1/s) — eases like a critically-damped spring. */
+const ZOOM_EASE = 9;
+
+export class ParticleStudio {
+  private renderer: THREE.WebGLRenderer;
+  private scene: THREE.Scene;
+  private camera: THREE.PerspectiveCamera;
+  private controls: OrbitControls;
+  private composer: EffectComposer;
+  private bloom: UnrealBloomPass;
+  private finish: ShaderPass;
+  private material: THREE.ShaderMaterial;
+  private dustMaterial: THREE.ShaderMaterial;
+  private geometry: THREE.BufferGeometry;
+  private points: THREE.Points;
+  private tiltGroup: THREE.Group;
+  private spinGroup: THREE.Group;
+  private layoutTex: THREE.DataTexture | null = null;
+
+  private settings: ParticleFieldSettings;
+  private N = 0;
+  private buf: {
+    prev: Float32Array;
+    prevX: Float32Array;
+    aL: Float32Array;
+    aU: Float32Array;
+    aO: Float32Array;
+    aR: Float32Array;
+  } | null = null;
+  private curForm: GenData | null = null;
+
+  private worker: Worker | null = null;
+  private reqId = 0;
+  private latestShown = 0;
+  private pending = new Map<number, (d: GenData) => void>();
+
+  private time = 0;
+  private morphT = 1;
+  private morphRunning = false;
+  private spin = 0.08;
+  private gain = 1;
+  private motionFrom = { wobble: 0.04, pulse: 0, gain: 1 };
+  private motionTo = { wobble: 0.04, pulse: 0, gain: 1 };
+  private qFrom = new THREE.Quaternion();
+  private qTo = new THREE.Quaternion();
+  private dpr = 1;
+  private width = 1;
+  private height = 1;
+  /** Live state parked while an offline export owns the renderer. */
+  private exportSaved: {
+    width: number;
+    height: number;
+    dpr: number;
+    time: number;
+    morphT: number;
+    morphRunning: boolean;
+    gain: number;
+    spinY: number;
+    tilt: THREE.Quaternion;
+    camPos: THREE.Vector3;
+    camQuat: THREE.Quaternion;
+    target: THREE.Vector3;
+    uMorph: number;
+    uWobble: number;
+    uPulse: number;
+    uStorm: number;
+  } | null = null;
+
+  /** The current form's display label + human name (for the preview caption). */
+  label = "";
+
+  constructor(canvas: HTMLCanvasElement, settings: ParticleFieldSettings) {
+    this.settings = settings;
+
+    this.renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: false,
+      powerPreference: "high-performance",
+    });
+    this.renderer.setClearColor(0x000000, 1);
+
+    this.scene = new THREE.Scene();
+    this.camera = new THREE.PerspectiveCamera(40, 1, 0.05, 100);
+    this.camera.position.set(0, 0, HOME_DISTANCE);
+
+    // Drag orbits; the wheel is left to the page (it must scroll down to the
+    // footer), so zoom is the stage's +/- buttons → `zoomBy` (2026-10-08).
+    this.controls = new OrbitControls(this.camera, canvas);
+    this.controls.enableDamping = true;
+    this.controls.dampingFactor = 0.06;
+    this.controls.enablePan = false;
+    this.controls.enableZoom = false;
+    this.controls.minDistance = MIN_DISTANCE;
+    this.controls.maxDistance = MAX_DISTANCE;
+    this.controls.rotateSpeed = 0.7;
+
+    this.tiltGroup = new THREE.Group();
+    this.spinGroup = new THREE.Group();
+    this.tiltGroup.add(this.spinGroup);
+    this.scene.add(this.tiltGroup);
+
+    this.material = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0 },
+        uSize: { value: settings.size },
+        uScale: { value: 1 },
+        uMorph: { value: 1 },
+        uStorm: { value: 1 },
+        uColorA: { value: new THREE.Color(settings.colorA) },
+        uColorB: { value: new THREE.Color(settings.colorB) },
+        uOpacity: { value: settings.opacity },
+        uWobble: { value: 0.04 },
+        uPulse: { value: 0 },
+        uTexW: { value: TEX_W },
+        uTexH: { value: 1 },
+        uLayout: { value: null },
+      },
+      vertexShader: /* glsl */ `
+        uniform float uTime, uSize, uScale, uMorph, uStorm, uWobble, uPulse, uTexW, uTexH;
+        uniform sampler2D uLayout;
+        attribute vec2 aPrevX;
+        attribute vec4 aL;
+        attribute vec4 aU;
+        attribute vec4 aO;
+        attribute vec4 aR;
+        varying float vMix;
+        varying float vAlpha;
+        ${NOISE_GLSL}
+
+        // Nearest-filtered fetch of texel (x, row) — the three@0.158 GLSL1 stand-in
+        // for the reference's texelFetch (needs no WebGL2 shader version bump).
+        vec4 tf(float x, float row) { return texture2D(uLayout, vec2((x + 0.5) / uTexW, (row + 0.5) / uTexH)); }
+        vec4 rowS(float row, float u, float closed) {
+          if (closed > 0.5) {
+            float x = fract(u) * uTexW;
+            float i0 = min(floor(x), uTexW - 1.0);
+            float i1 = mod(i0 + 1.0, uTexW);
+            return mix(tf(i0, row), tf(i1, row), x - i0);
+          }
+          float x = clamp(u, 0.0, 1.0) * (uTexW - 1.0);
+          float i0 = floor(x);
+          return mix(tf(i0, row), tf(min(i0 + 1.0, uTexW - 1.0), row), x - i0);
+        }
+        vec4 evalForm(out float alpha) {
+          float mode = aL.w;
+          if (mode > 1.5) {
+            alpha = 1.0;
+            float t = uTime * aU.z, ph = aR.y * 6.2831853;
+            vec3 d = vec3(sin(t + ph), sin(t * 0.83 + ph * 1.7 + 1.3), sin(t * 0.71 + ph * 2.3 + 2.1)) * aU.w;
+            return vec4(aO.xyz + d, aU.y);
+          }
+          float u = fract(aU.x + aU.z * uTime);
+          alpha = aR.w > 0.5 ? smoothstep(0.0, 0.07, u) * (1.0 - smoothstep(0.9, 1.0, u)) : 1.0;
+          vec4 s;
+          if (mode < 0.5) {
+            s = rowS(aL.x, u, aL.z);
+          } else {
+            float v = clamp(aU.y + aU.w * sin(uTime * 0.5 + aR.y * 6.2831853), 0.0, 1.0);
+            float y = v * (aL.y - 1.0);
+            float j0 = floor(y);
+            float j1 = min(j0 + 1.0, aL.y - 1.0);
+            s = mix(rowS(aL.x + j0, u, aL.z), rowS(aL.x + j1, u, aL.z), y - j0);
+          }
+          return vec4(s.xyz + aO.xyz, s.w + aO.w);
+        }
+
+        void main() {
+          float m = clamp((uMorph - aR.z * 0.45) / 0.55, 0.0, 1.0);
+          m = m * m * (3.0 - 2.0 * m);
+          float a1;
+          vec4 f = evalForm(a1);
+          vec3 p = mix(position, f.xyz, m);
+          float storm = sin(m * 3.14159265) * uStorm;
+
+          vec3 n = snoiseVec(p * 0.8 + vec3(0.0, uTime * 0.07, uTime * 0.04));
+          p += n * (uWobble + storm * 0.45);
+          p *= 1.0 + uPulse * 0.035 * sin(length(p) * 5.0 - uTime * 1.4);
+
+          vec4 mv = modelViewMatrix * vec4(p, 1.0);
+          gl_Position = projectionMatrix * mv;
+
+          float px = uSize * aR.x * uScale / -mv.z;
+          float fade = 1.0;
+          if (px < 2.0) { fade = px * px * 0.25; px = 2.0; }
+          gl_PointSize = px;
+
+          vMix = mix(aPrevX.y, f.w, m);
+          vAlpha = fade * mix(aPrevX.x, a1, m) * (1.0 + storm * 0.3);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform vec3 uColorA, uColorB;
+        uniform float uOpacity;
+        varying float vMix;
+        varying float vAlpha;
+        void main() {
+          vec2 c = gl_PointCoord - 0.5;
+          float d = length(c);
+          if (d > 0.5) discard;
+          float a = smoothstep(0.5, 0.0, d);
+          a = a * a * (0.6 + 0.4 * a);
+          vec3 col = mix(uColorA, uColorB, smoothstep(0.0, 1.0, vMix));
+          gl_FragColor = vec4(col, a * vAlpha * uOpacity);
+        }
+      `,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      blending: THREE.AdditiveBlending,
+    });
+
+    this.geometry = new THREE.BufferGeometry();
+    this.points = new THREE.Points(this.geometry, this.material);
+    this.points.frustumCulled = false;
+    this.points.visible = false;
+    this.spinGroup.add(this.points);
+
+    // Ambient dust around the specimen.
+    this.dustMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0 },
+        uScale: { value: 1 },
+        uColor: { value: new THREE.Color("#9a9ab8") },
+        uOpacity: { value: 0.7 },
+      },
+      vertexShader: /* glsl */ `
+        uniform float uTime, uScale;
+        attribute float aSeed;
+        varying float vA;
+        void main() {
+          vec3 p = position;
+          float t = uTime * 0.03;
+          p.x += sin(t + aSeed * 12.0) * 0.3;
+          p.y += cos(t * 0.8 + aSeed * 7.0) * 0.3;
+          vec4 mv = modelViewMatrix * vec4(p, 1.0);
+          gl_Position = projectionMatrix * mv;
+          float px = (0.6 + aSeed * 1.4) * uScale / -mv.z;
+          vA = clamp(px * px * 0.25, 0.0, 1.0) * (0.35 + 0.5 * aSeed);
+          gl_PointSize = max(px, 2.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform vec3 uColor;
+        uniform float uOpacity;
+        varying float vA;
+        void main() {
+          float d = length(gl_PointCoord - 0.5);
+          if (d > 0.5) discard;
+          float a = smoothstep(0.5, 0.0, d);
+          gl_FragColor = vec4(uColor, a * vA * uOpacity);
+        }
+      `,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      blending: THREE.AdditiveBlending,
+    });
+    {
+      const DUST = 2600;
+      let a = 4242;
+      const rng = () => {
+        a |= 0;
+        a = (a + 0x6d2b79f5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+      const p = new Float32Array(DUST * 3);
+      const s = new Float32Array(DUST);
+      for (let i = 0; i < DUST; i++) {
+        const z = rng() * 2 - 1;
+        const ang = rng() * Math.PI * 2;
+        const r = 3 + Math.pow(rng(), 0.6) * 9;
+        const q = Math.sqrt(1 - z * z);
+        p[i * 3] = Math.cos(ang) * q * r;
+        p[i * 3 + 1] = z * r;
+        p[i * 3 + 2] = Math.sin(ang) * q * r;
+        s[i] = rng();
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.BufferAttribute(p, 3));
+      g.setAttribute("aSeed", new THREE.BufferAttribute(s, 1));
+      const dust = new THREE.Points(g, this.dustMaterial);
+      dust.frustumCulled = false;
+      this.scene.add(dust);
+    }
+
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.bloom = new UnrealBloomPass(
+      new THREE.Vector2(1, 1),
+      settings.bloomStrength,
+      settings.bloomRadius,
+      settings.bloomThreshold,
+    );
+    this.composer.addPass(this.bloom);
+    // Soft exposure curve keeps dense regions colourful + adds faint film grain.
+    this.finish = new ShaderPass({
+      uniforms: {
+        tDiffuse: { value: null },
+        uExposure: { value: 1.35 },
+      },
+      vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      fragmentShader: /* glsl */ `
+        uniform sampler2D tDiffuse;
+        uniform float uExposure;
+        varying vec2 vUv;
+        float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+        void main() {
+          vec3 c = texture2D(tDiffuse, vUv).rgb;
+          c = 1.0 - exp(-c * uExposure);
+          c += (hash(gl_FragCoord.xy) - 0.5) / 255.0;
+          gl_FragColor = vec4(c, 1.0);
+        }
+      `,
+    });
+    this.composer.addPass(this.finish);
+    this.composer.addPass(new OutputPass());
+
+    // Off-main-thread generation, with a main-thread fallback.
+    try {
+      this.worker = new Worker(new URL("./worker.ts", import.meta.url), {
+        type: "module",
+      });
+      this.worker.onmessage = (e: MessageEvent) => {
+        const job = this.pending.get(e.data.id);
+        if (job) {
+          this.pending.delete(e.data.id);
+          job(e.data as GenData);
+        }
+      };
+      this.worker.onerror = (err) => {
+        err.preventDefault?.();
+        this.worker?.terminate();
+        this.worker = null;
+      };
+    } catch {
+      this.worker = null;
+    }
+
+    this.allocate(settings.count);
+  }
+
+  private allocate(count: number): void {
+    this.N = count;
+    this.buf = {
+      prev: new Float32Array(count * 3),
+      prevX: new Float32Array(count * 2),
+      aL: new Float32Array(count * 4),
+      aU: new Float32Array(count * 4),
+      aO: new Float32Array(count * 4),
+      aR: new Float32Array(count * 4),
+    };
+    this.curForm = null;
+    this.geometry.dispose();
+    const attrs: [string, keyof NonNullable<typeof this.buf>, number][] = [
+      ["position", "prev", 3],
+      ["aPrevX", "prevX", 2],
+      ["aL", "aL", 4],
+      ["aU", "aU", 4],
+      ["aO", "aO", 4],
+      ["aR", "aR", 4],
+    ];
+    for (const [name, key, size] of attrs) {
+      this.geometry.deleteAttribute(name);
+      this.geometry.setAttribute(
+        name,
+        new THREE.BufferAttribute(this.buf[key], size),
+      );
+    }
+    this.geometry.setDrawRange(0, count);
+    this.points.visible = false;
+  }
+
+  private setLayoutTexture(tex: Float32Array, H: number): void {
+    const t = new THREE.DataTexture(
+      tex as unknown as BufferSource,
+      TEX_W,
+      H,
+      THREE.RGBAFormat,
+      THREE.FloatType,
+    );
+    t.minFilter = THREE.NearestFilter;
+    t.magFilter = THREE.NearestFilter;
+    t.generateMipmaps = false;
+    t.needsUpdate = true;
+    this.layoutTex?.dispose();
+    this.layoutTex = t;
+    this.material.uniforms.uLayout.value = t;
+    this.material.uniforms.uTexH.value = H;
+  }
+
+  private ev = [0, 0, 0, 0, 0];
+  private smooth01(x: number): number {
+    const k = Math.min(1, Math.max(0, x));
+    return k * k * (3 - 2 * k);
+  }
+
+  // Freeze what's on screen (per-particle morph progress included) into "prev".
+  private snapshotCurrent(): void {
+    if (!this.curForm || !this.buf) return;
+    const { prev, prevX, aR } = this.buf;
+    const mt = this.morphT;
+    for (let i = 0; i < this.N; i++) {
+      evalParticle(this.curForm, i, this.time, this.ev);
+      const m = mt >= 1 ? 1 : this.smooth01((mt - aR[i * 4 + 2] * 0.45) / 0.55);
+      const i3 = i * 3, i2 = i * 2;
+      prev[i3] += (this.ev[0] - prev[i3]) * m;
+      prev[i3 + 1] += (this.ev[1] - prev[i3 + 1]) * m;
+      prev[i3 + 2] += (this.ev[2] - prev[i3 + 2]) * m;
+      prevX[i2] += (this.ev[4] - prevX[i2]) * m;
+      prevX[i2 + 1] += (this.ev[3] - prevX[i2 + 1]) * m;
+    }
+  }
+
+  // Start the new form from a shrunken copy (implode) or a wide cloud (gather).
+  private scatterPrev(scale: number): void {
+    if (!this.curForm || !this.buf) return;
+    let a = 0x1234 ^ (this.reqId * 2654435761);
+    const rng = () => {
+      a |= 0;
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const { prev, prevX } = this.buf;
+    for (let i = 0; i < this.N; i++) {
+      evalParticle(this.curForm, i, this.time, this.ev);
+      const i3 = i * 3;
+      if (scale < 1) {
+        prev[i3] = this.ev[0] * scale;
+        prev[i3 + 1] = this.ev[1] * scale;
+        prev[i3 + 2] = this.ev[2] * scale;
+      } else {
+        const z = rng() * 2 - 1, ang = rng() * Math.PI * 2, r = scale * (0.6 + rng());
+        const q = Math.sqrt(1 - z * z);
+        prev[i3] = Math.cos(ang) * q * r;
+        prev[i3 + 1] = z * r;
+        prev[i3 + 2] = Math.sin(ang) * q * r;
+      }
+      prevX[i * 2] = 0;
+      prevX[i * 2 + 1] = this.ev[3];
+    }
+  }
+
+  /** Generate + present a form. `mode`: 'morph' | 'implode' | 'gather'. */
+  async showForm(
+    kind: string,
+    seed: number,
+    mode: "morph" | "implode" | "gather" = "morph",
+  ): Promise<void> {
+    if (!this.buf) return;
+    const id = ++this.reqId;
+    const data = await new Promise<GenData>((resolve) => {
+      if (this.worker) {
+        this.pending.set(id, resolve);
+        this.worker.postMessage({ id, kind, seed, count: this.N });
+      } else {
+        setTimeout(() => resolve(generate(kind, seed, this.N) as unknown as GenData), 0);
+      }
+    });
+    if (id < this.latestShown) return; // a newer request already landed
+    this.latestShown = id;
+    if (data.aL.length !== this.N * 4) return; // count changed mid-flight
+
+    if (mode === "morph" && this.curForm) this.snapshotCurrent();
+    this.buf.aL.set(data.aL);
+    this.buf.aU.set(data.aU);
+    this.buf.aO.set(data.aO);
+    this.buf.aR.set(data.aR);
+    this.curForm = {
+      ...data,
+      aL: this.buf.aL,
+      aU: this.buf.aU,
+      aO: this.buf.aO,
+      aR: this.buf.aR,
+    };
+    this.setLayoutTexture(data.tex, data.H);
+    if (mode === "implode" || (!this.points.visible && mode === "morph"))
+      this.scatterPrev(0.15);
+    if (mode === "gather") this.scatterPrev(4);
+    for (const name of ["position", "aPrevX", "aL", "aU", "aO", "aR"])
+      this.geometry.getAttribute(name).needsUpdate = true;
+
+    this.qFrom.copy(this.tiltGroup.quaternion);
+    const tl = data.motion.tilt || [0, 0, 0];
+    this.qTo.setFromEuler(new THREE.Euler(tl[0], tl[1], tl[2]));
+    this.motionFrom.wobble = this.material.uniforms.uWobble.value;
+    this.motionFrom.pulse = this.material.uniforms.uPulse.value;
+    this.motionFrom.gain = this.gain;
+    this.motionTo.wobble = data.motion.wobble;
+    this.motionTo.pulse = data.motion.pulse || 0;
+    this.motionTo.gain = data.motion.gain || 1;
+    this.spin = data.motion.spin;
+    this.label = data.motion.label;
+    this.morphT = 0;
+    this.morphRunning = true;
+    this.points.visible = true;
+    this.material.uniforms.uStorm.value = mode === "morph" ? 1 : 0.5;
+  }
+
+  // ── Live setters ────────────────────────────────────────────────────
+  setCount(count: number): void {
+    if (count === this.N) return;
+    this.allocate(count);
+  }
+  setSize(size: number): void {
+    this.settings.size = size;
+    this.material.uniforms.uSize.value = size;
+  }
+  setColors(colorA: string, colorB: string): void {
+    this.material.uniforms.uColorA.value.set(colorA);
+    this.material.uniforms.uColorB.value.set(colorB);
+  }
+  setBloom(strength: number, radius: number, threshold: number): void {
+    this.bloom.strength = strength;
+    this.bloom.radius = radius;
+    this.bloom.threshold = threshold;
+  }
+  setOpacity(opacity: number): void {
+    this.settings.opacity = opacity;
+  }
+  setSpeed(speed: number): void {
+    this.settings.speed = speed;
+  }
+  setAutorotate(on: boolean): void {
+    this.settings.autorotate = on;
+  }
+
+  resetView(): void {
+    this.camera.position.set(0, 0, HOME_DISTANCE);
+    this.distance = HOME_DISTANCE;
+    this.distanceGoal = HOME_DISTANCE;
+    this.controls.target.set(0, 0, 0);
+    this.controls.update();
+  }
+
+  /** Camera distance now, and where the zoom buttons asked it to go — the
+   *  render loop eases one into the other (a damped dolly). */
+  private distance = HOME_DISTANCE;
+  private distanceGoal = HOME_DISTANCE;
+
+  /** Dolly by `factor` (< 1 = closer), clamped to the orbit's limits. */
+  zoomBy(factor: number): void {
+    this.distanceGoal = THREE.MathUtils.clamp(
+      this.distanceGoal * factor,
+      MIN_DISTANCE,
+      MAX_DISTANCE,
+    );
+  }
+
+  /** Whether the zoom goal can still move closer / further. */
+  zoomRange(): { canIn: boolean; canOut: boolean } {
+    return {
+      canIn: this.distanceGoal > MIN_DISTANCE + 0.001,
+      canOut: this.distanceGoal < MAX_DISTANCE - 0.001,
+    };
+  }
+
+  /** Ease the camera's distance toward the zoom goal along its current
+   *  orbit direction (before `controls.update`, which keeps the radius).
+   *  `snap` lands it at once (an export must not dolly mid-render). */
+  private stepZoom(dt: number, snap = false): void {
+    const gap = this.distanceGoal - this.distance;
+    if (gap === 0) return;
+    this.distance =
+      snap || Math.abs(gap) < 0.0001
+        ? this.distanceGoal
+        : this.distance + gap * (1 - Math.exp(-dt * ZOOM_EASE));
+    const t = this.controls.target;
+    this.camera.position.sub(t).setLength(this.distance).add(t);
+  }
+
+  resize(width: number, height: number, dpr: number): void {
+    if (this.exportSaved) {
+      // An export owns the renderer — apply the new live size on `endExport`.
+      this.exportSaved.width = width;
+      this.exportSaved.height = height;
+      this.exportSaved.dpr = dpr;
+      return;
+    }
+    this.applySize(width, height, dpr);
+  }
+
+  private applySize(width: number, height: number, dpr: number): void {
+    this.dpr = dpr;
+    this.width = width;
+    this.height = height;
+    this.renderer.setPixelRatio(dpr);
+    this.renderer.setSize(width, height, false);
+    this.composer.setPixelRatio(dpr);
+    this.composer.setSize(width, height);
+    this.bloom.resolution.set(width, height);
+    this.camera.aspect = width / height;
+    this.camera.updateProjectionMatrix();
+    const scale = dpr * height * 0.0045;
+    this.material.uniforms.uScale.value = scale;
+    this.dustMaterial.uniforms.uScale.value = scale;
+  }
+
+  /** Advance the live loop by `dt` seconds and draw (no-op while exporting). */
+  renderFrame(dt: number): void {
+    if (this.exportSaved) return;
+    this.step(dt);
+  }
+
+  private step(dt: number): void {
+    const speed = this.settings.speed;
+    this.time += dt * speed;
+    const u = this.material.uniforms;
+
+    if (this.morphRunning) {
+      this.morphT = Math.min(1, this.morphT + dt / MORPH_TIME);
+      const e =
+        this.morphT < 0.5
+          ? 4 * this.morphT ** 3
+          : 1 - Math.pow(-2 * this.morphT + 2, 3) / 2;
+      u.uMorph.value = this.morphT;
+      this.tiltGroup.quaternion.slerpQuaternions(this.qFrom, this.qTo, e);
+      u.uWobble.value =
+        this.motionFrom.wobble + (this.motionTo.wobble - this.motionFrom.wobble) * e;
+      u.uPulse.value =
+        this.motionFrom.pulse + (this.motionTo.pulse - this.motionFrom.pulse) * e;
+      this.gain = this.motionFrom.gain + (this.motionTo.gain - this.motionFrom.gain) * e;
+      if (this.morphT >= 1) this.morphRunning = false;
+    }
+
+    this.spinGroup.rotation.y += this.spin * dt * speed;
+    this.controls.autoRotate = this.settings.autorotate;
+    this.controls.autoRotateSpeed = 0.35 * Math.max(speed, 0.001);
+    this.stepZoom(dt);
+    this.controls.update();
+
+    u.uTime.value = this.time;
+    u.uSize.value = this.settings.size;
+    // Keep overall luminance stable regardless of particle count.
+    u.uOpacity.value =
+      this.gain *
+      this.settings.opacity *
+      Math.min(2.2, Math.max(0.3, Math.sqrt(160000 / Math.max(1, this.N)))) *
+      0.8;
+    this.dustMaterial.uniforms.uTime.value = this.time;
+
+    this.composer.render(dt);
+  }
+
+  // ── Offline export (video frames / hi-res PNG) ───────────────────────
+
+  /** The live preview's aspect (width / height). */
+  get aspect(): number {
+    return this.width / Math.max(1, this.height);
+  }
+
+  /**
+   * Hand the renderer to an offline export at `width×height` (pixel ratio 1).
+   * The live loop pauses and its full state (time, morph, spin, tilt, camera)
+   * is parked; frames then advance deterministically via {@link exportFrame}.
+   * `uScale` follows the frame height, so particles keep their proportions.
+   */
+  beginExport(width: number, height: number): void {
+    if (this.exportSaved) this.endExport();
+    this.stepZoom(0, true);
+    const u = this.material.uniforms;
+    this.exportSaved = {
+      width: this.width,
+      height: this.height,
+      dpr: this.dpr,
+      time: this.time,
+      morphT: this.morphT,
+      morphRunning: this.morphRunning,
+      gain: this.gain,
+      spinY: this.spinGroup.rotation.y,
+      tilt: this.tiltGroup.quaternion.clone(),
+      camPos: this.camera.position.clone(),
+      camQuat: this.camera.quaternion.clone(),
+      target: this.controls.target.clone(),
+      uMorph: u.uMorph.value,
+      uWobble: u.uWobble.value,
+      uPulse: u.uPulse.value,
+      uStorm: u.uStorm.value,
+    };
+    this.applySize(width, height, 1);
+  }
+
+  /**
+   * Advance the export timeline by `dt` seconds (0 for the first frame), render
+   * at the export size and copy the frame into `out` — in the same task, so the
+   * drawing buffer is still intact (no `preserveDrawingBuffer` needed).
+   */
+  exportFrame(out: CanvasRenderingContext2D, dt: number): void {
+    if (!this.exportSaved) throw new Error("No export in progress.");
+    this.step(dt);
+    out.drawImage(this.renderer.domElement, 0, 0, out.canvas.width, out.canvas.height);
+  }
+
+  /** Restore the live state + size parked by {@link beginExport}. */
+  endExport(): void {
+    const s = this.exportSaved;
+    if (!s) return;
+    this.exportSaved = null;
+    const u = this.material.uniforms;
+    this.time = s.time;
+    this.morphT = s.morphT;
+    this.morphRunning = s.morphRunning;
+    this.gain = s.gain;
+    this.spinGroup.rotation.y = s.spinY;
+    this.tiltGroup.quaternion.copy(s.tilt);
+    this.camera.position.copy(s.camPos);
+    this.camera.quaternion.copy(s.camQuat);
+    this.controls.target.copy(s.target);
+    u.uMorph.value = s.uMorph;
+    u.uWobble.value = s.uWobble;
+    u.uPulse.value = s.uPulse;
+    u.uStorm.value = s.uStorm;
+    this.applySize(s.width, s.height, s.dpr);
+    this.step(0);
+  }
+
+  /** The canvas the renderer draws into (for video capture). */
+  get canvas(): HTMLCanvasElement {
+    return this.renderer.domElement;
+  }
+
+  dispose(): void {
+    this.exportSaved = null;
+    this.worker?.terminate();
+    this.worker = null;
+    this.pending.clear();
+    this.controls.dispose();
+    this.geometry.dispose();
+    this.material.dispose();
+    this.dustMaterial.dispose();
+    this.layoutTex?.dispose();
+    this.composer.dispose();
+    this.renderer.dispose();
+  }
+}
+
+```
+
+Build a Three.js scene that extrudes the SVG below ("Play") into a lit 3D model. Everything below is the exact state of the reference preview — reproduce it 1:1.
+
+## three.js version (read first)
+- Pin three@0.158.0 exactly. Its MeshPhysicalMaterial lighting, PMREMGenerator, RoomEnvironment and UnrealBloomPass all changed in later releases (e.g. r16x+ DFG-LUT/multi-scatter specular, r185 bloom kernels and ×3 composite gain), so any other version shifts the chrome, reflections and bevel glow.
+- Imports (r158 addon paths): three/examples/jsm/controls/OrbitControls.js, three/examples/jsm/loaders/SVGLoader.js, three/examples/jsm/lights/RectAreaLightUniformsLib.js, three/examples/jsm/environments/RoomEnvironment.js, three/examples/jsm/postprocessing/EffectComposer.js, three/examples/jsm/postprocessing/RenderPass.js, three/examples/jsm/postprocessing/UnrealBloomPass.js, three/examples/jsm/postprocessing/OutputPass.js, three/examples/jsm/postprocessing/ShaderPass.js, three/examples/jsm/shaders/FXAAShader.js.
+- Colour management = the r158 defaults: THREE.ColorManagement.enabled = true (every hex colour is sRGB, converted to linear on input), renderer.outputColorSpace = SRGBColorSpace, renderer.useLegacyLights = false (physical light units). Tone mapping: renderer.toneMapping = ACESFilmicToneMapping, toneMappingExposure 1.05 — applied by OutputPass (r158 RenderPass renders linear HDR into the composer's HalfFloat target; tone mapping only happens at OutputPass).
+
+Reference frame (the tool's preview box when this prompt was copied — a REFERENCE, not a size to reproduce):
+- Build the effect responsive: size the canvas/element to whatever container it is mounted in — a full-screen background, a hero, a card — and recompute on resize. Do NOT hard-code the numbers below as the component's size.
+- They tell you the scale the look was judged at, so size-dependent values (cell sizes, point sizes, radii, grain) can be scaled to the real container, and so a render at exactly this size can be compared 1:1 with the preview.
+- Frame: 1350×682 CSS px (landscape, ≈1.98:1 (≈2:1)).
+- Canvas: same box; backing store 1350×682 px at devicePixelRatio 1.
+- Layout: the effect fills the frame edge-to-edge (full-bleed, no letterboxing).
+- The canvas paints its own opaque scene background (#151512) over the whole frame.
+- camera.aspect = frame width / height (the canvas is 100% × 100% of the frame, renderer.setSize(w, h, false), pixel ratio min(devicePixelRatio, 2)). At distance 420 a 36° vertical fov sees 273 world units of height, so the model (longest side 200 units) spans at most ≈73% of the frame height — build it at this aspect to match.
+
+## Overview
+Geometry: load the SVG with SVGLoader and merge every filled path into ONE ExtrudeGeometry (holes preserved). Depth 60 units, bevel 4 — make the bevel adaptive: clamp it below the smallest hole so thin loops never self-intersect. Recompute vertex normals so the front/back caps stay flat while the bevel and side walls stay smooth. Centre the mesh and scale it into a 200-unit box.
+Material — Liquid chrome: MeshPhysicalMaterial, metalness 0.94, roughness 0.12, clearcoat 1. Base colour #e0d109; caps a darker shade, side walls a brighter one.
+The mesh uses a two-material array: group 0 (caps) is the core material, group 1 (walls) is a slightly rougher side material.
+Lighting — Rim + fill: RectAreaLights (call RectAreaLightUniformsLib.init() first), tinted from #3d6fe0, over a soft ambient and a PMREM studio environment for reflections.
+Post: RenderPass → UnrealBloom → OutputPass (ACES + sRGB) → FXAA.
+Scene background #151512 (a plain backdrop — reflections come from the studio environment, not the background).
+Motion: idle rotation on Y at a constant 0.4 rad/s. OrbitControls with damping and zoom, panning disabled.
+Render at devicePixelRatio, resize with the container, and pause the loop when the canvas is off-screen.
+
+## SVG
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="currentColor"><path d="M22 12 L22 88 L86 50 Z"/></svg>
+```
+
+## Exact parameters
+
+### Renderer & camera
+- WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance" }), outputColorSpace SRGBColorSpace, toneMapping ACESFilmicToneMapping, toneMappingExposure 1.05. setPixelRatio(min(devicePixelRatio, 2)).
+- PerspectiveCamera(fov 36, aspect = container w/h, near 1, far 5000) at (0, 0, 420), zoom 1, looking at the origin (OrbitControls target (0, 0, 0)).
+- OrbitControls: enableDamping, dampingFactor 0.06, enablePan false, minDistance 150, maxDistance 900; rotate/zoom speeds default.
+- Environment: scene.environment = new PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture (r158 RoomEnvironment, no renderer argument). scene.background = Color(#151512).
+- On resize: renderer.setPixelRatio(dpr), renderer.setSize(w, h, false), composer.setPixelRatio(dpr), composer.setSize(w, h) (every pass, bloom included, then runs at w·dpr × h·dpr — do NOT call bloom.setSize with CSS pixels), FXAA resolution = (1/(w·dpr), 1/(h·dpr)), camera.aspect = w/h, updateProjectionMatrix().
+
+### Starting pose & motion
+- Scene graph: scene → objectGroup (a Group, at the origin) → the extruded mesh (no own transform beyond the geometry's centring/scale). The lights live in a separate group and do NOT rotate.
+- At t = 0 objectGroup.rotation = (0, 0, 0): the SVG's front cap faces the camera straight on (+Z), upright, centred; camera at (0, 0, 420).
+- Idle spin starts on the very first rendered frame, with no ease-in and no easing ever: each frame objectGroup.rotation.y += dt × 0.4 (constant 0.4 rad/s, one turn ≈ 15.708 s), dt = min(0.05, seconds since the previous frame). It only advances while the canvas is visible (the loop pauses off-screen; the timer is reset on resume so there is no jump). Under prefers-reduced-motion the spin is off. The copied frame is therefore at an arbitrary Y angle — compare against rotation.y = 0 (or disable spin) for a still match.
+- Loop order each frame: (spin) → controls.update() → composer.render(). "Reset view": controls.reset(), camera back to (0, 0, 420), objectGroup.rotation = (0, 0, 0).
+
+### Geometry
+- SVG Y is down: before parsing, replace "currentColor" with "#ffffff"; collect SVGLoader.createShapes(path) for every path.
+- sourceSize = max(bbox width, bbox height) of all shape points (getPoints(16)); scaleFactor = 200 / sourceSize. complexity = total curve count.
+- bevelSegments = complexity > 900 ? 8 : > 450 ? 14 : > 160 ? 24 : 32; curveSegments = > 900 ? 8 : > 450 ? 12 : > 160 ? 16 : 20; steps = complexity > 900 ? 1 : 2.
+- bevelSize = max(0.18 / scaleFactor, min(4 / scaleFactor, smallestHoleDimension × 0.38)); bevelThickness = bevelSize × (2.4 / 1.45); bevelOffset = −0.2 × bevelSize; bevelEnabled = true; depth = 60 / scaleFactor.
+- geometry.center(), then geometry.scale(scaleFactor, −scaleFactor, scaleFactor) and reverse every triangle's winding (swap indices 1↔2) so normals face out.
+- Normals: faces with |normal.z| > 0.94 are caps → force (0, 0, ±1); all other vertices get angle-weighted smoothed face normals, welded by position (1e-4 precision), kept separate from cap vertices.
+
+### Colour palette
+Derived from one colour via HSL in LINEAR-sRGB space (three.js Color.getHSL/setHSL with ColorManagement enabled): h,s,_ = HSL(base); neutral = s < 0.28; sat = neutral ? 0 : clamp(s × 0.96, 0.18, 0.94); tone(l, k) = setHSL(h, neutral ? 0 : clamp(sat × k, 0, 1), l).
+- Roles: core = tone(0.14, 0.88) [neutral: l 0.08], side = tone(0.28, 0.72) [neutral: l 0.20], emissive = tone(0.03, 0.8), key = tone(0.52, 0.5), rim = tone(0.56, 1), fill = tone(0.24, 0.82).
+- Object colour #e0d109 → core #8a822b, side #b6ac55, emissive #413d15.
+- Light colour #3d6fe0 → key #99a6dd, rim #7896f7, fill #4d64ab.
+
+### Materials — Liquid chrome
+- Caps (group 0) MeshPhysicalMaterial (FrontSide): color #8a822b, metalness 0.94, roughness 0.12, clearcoat 1, clearcoatRoughness 0.08, transmission 0, ior 1.48, thickness 0, envMapIntensity 2.3 (2.3 × reflection 1), iridescence 0.
+- Walls (group 1) MeshPhysicalMaterial (FrontSide): color #b6ac55, emissive #413d15 at emissiveIntensity 0.11, metalness 0.94, roughness 0.18 (caps + 0.06, max 1), clearcoat 1, clearcoatRoughness 0 (default), ior 1.5 (default), transmission 0, thickness 0, envMapIntensity 2.05 (2.05 × reflection), iridescence 0.
+
+### Lights — Rim + fill (light power 0.7×)
+- AmbientLight #8babff, intensity 0.056 (0.08 × 0.7).
+- RectAreaLight fill (#4d64ab): intensity 3.5 (5 × 0.7), width 240, height 300, position (-90, -40, 170), lookAt (0, 0, 0).
+- RectAreaLight rim (#7896f7): intensity 16.8 (24 × 0.7), width 72, height 520, position (-165, 20, -60), lookAt (-18, 0, 0).
+- RectAreaLight rim (#7896f7): intensity 15.4 (22 × 0.7), width 72, height 520, position (165, 10, -58), lookAt (18, 0, 0).
+- RectAreaLight key (#99a6dd): intensity 7 (10 × 0.7), width 150, height 300, position (120, 90, 160), lookAt (0, 0, 0).
+
+### Post-processing (bloom exactly)
+- EffectComposer(renderer) with its r158 default target (HalfFloatType, linear HDR, no MSAA). Passes in order: RenderPass(scene, camera) → UnrealBloomPass → OutputPass → ShaderPass(FXAAShader).
+- UnrealBloomPass: construct new UnrealBloomPass(new Vector2(1, 1), 0.3, 0.5, 0.9), then set strength = 0.2 (the Glow slider), radius = 0.5, threshold = 0.86 (the Liquid chrome material's bloom character). Its resolution comes only from composer.setSize → w·dpr × h·dpr (bright pass + first mip at half that, 5 mips each halving).
+- What glows: there is NO selective bloom — everything on the default layer 0 (the whole frame) goes through the high-pass, which runs on the linear HDR render BEFORE ACES: luma = dot(rgb, (0.299, 0.587, 0.114)), alpha = smoothstep(0.86, 0.86 + 0.01, luma). In practice only the specular hotspots exceed it — chiefly the rim lights' streaks along the bevel/side-wall edges, which is the "rim glow".
+- r158 bloom maths (differs from newer three): separable Gaussian blur, kernel radii 3/5/7/9/11 per mip with σ = kernel radius, weights normalised by their sum; composite = strength × Σ lerp(f, 1.2 − f, radius) × mip_i with f = [1.0, 0.8, 0.6, 0.4, 0.2] (no ×3 gain); added onto the frame with plain AdditiveBlending (not premultiplied). Background colour is not touched unless it is brighter than the threshold.
+- OutputPass: ACES filmic × exposure 1.05, then linear → sRGB. FXAA last, in display space, resolution uniform (1/(w·dpr), 1/(h·dpr)).
+
+## The user's own files (not included in this prompt)
+
+This look was built on files the user uploaded into the tool:
+- image — the picture in slot 1 of 12.
+- image — the picture in slot 2 of 12.
+- image — the picture in slot 3 of 12.
+- image — the picture in slot 4 of 12.
+- image — the picture in slot 5 of 12.
+- image — the picture in slot 6 of 12.
+- image — the picture in slot 7 of 12.
+- image — the picture in slot 8 of 12.
+
+Use exactly these files. If they came with this prompt (the GetLayers MCP hands them over in `media`), download and use them. Otherwise ask the user for them before building — never substitute, generate or download a stand-in.
+
+Rebuild this looping image showcase 1:1 — "Helix" (engine template `spiral-stream`, template engine; 3D & Perspective): Cards descend a vertical helix, winding round as they fall.
+
+The motion IS the render function below — port it verbatim (keep the maths, constants and draw order; only rename if you must). Do not reinterpret it from the description.
+
+## Frame
+- Stage aspect setting 16:9; the canvas fills the stage box (CSS 100% × 100%). Where the measured box below differs, it is what the preview actually showed.
+Reference frame (the tool's preview box when this prompt was copied — a REFERENCE, not a size to reproduce):
+- Build the effect responsive: size the canvas/element to whatever container it is mounted in — a full-screen background, a hero, a card — and recompute on resize. Do NOT hard-code the numbers below as the component's size.
+- They tell you the scale the look was judged at, so size-dependent values (cell sizes, point sizes, radii, grain) can be scaled to the real container, and so a render at exactly this size can be compared 1:1 with the preview.
+- Frame: 474×266 CSS px (landscape, 16:9).
+- Canvas: same box; backing store 474×266 px at devicePixelRatio 1.
+- Layout: the effect fills the frame edge-to-edge (full-bleed, no letterboxing).
+- Canvas backing store = CSS size × min(devicePixelRatio, 2); render() receives width/height in those device pixels with an identity transform, and every size inside the template is derived from width/height (resolution independent).
+- Background: a solid #262405 fill. The template's own background is forced transparent (params below) and the host paints this fill BEHIND the cards after each render (globalCompositeOperation "destination-over") — see paintBehind.
+
+## Loop & time
+- One loop = template defaultDuration 28s ÷ speed 1.0× = 28.0s (min 0.8s).
+- t ∈ [0,1) is linear in time: t = (elapsedSeconds / 28.0) mod 1 (per frame: t = (t + min(dt, 0.05) / 28.0) % 1). Any easing lives inside the template code. The loop is seamless at t = 1 → 0.
+- prefers-reduced-motion: draw one static frame (t = 0.12) instead of looping.
+
+## Images
+- 12 slots; slots 0, 1, 2, 3, 4, 5, 6, 7 hold my uploaded images (in that order); every other slot i shows a demo gradient image (demo[i % 4]) — use my own images there too.
+- Media fitting (cover crop, or natural aspect where the template has a mediaFit param) is done by the template's own draw helpers in the source below; images stay in the browser, nothing is uploaded.
+
+## Params — the exact object passed to render() as `params`
+```json
+{
+  "cornerRadius": 3,
+  "padding": 6,
+  "shadowEnabled": false,
+  "turns": 3.75,
+  "cardCount": 24,
+  "direction": "down",
+  "motion": "flow",
+  "pulse": 60,
+  "ringSize": 62,
+  "taper": 0,
+  "cardSize": 33,
+  "cardAspect": "1:1",
+  "cardStyle": "curved",
+  "backFade": 55,
+  "perspective": 20,
+  "tilt": 0,
+  "gap": 28,
+  "scalePulse": 0,
+  "offsetX": 0,
+  "offsetY": 0,
+  "backgroundType": "color",
+  "background": "rgba(0,0,0,0)"
+}
+```
+
+(UI labels for the tuned controls: Spiral turns: 3.75 · Card count: 24 · Direction: down · Motion: flow · Spiral size: 62% · Taper: 0% · Card size: 33% · Card ratio: 1:1 · Card style: curved · Back fade: 55% · Perspective: 20% · Ring tilt: 0° · Card gap: 28% · Scale pulse: 0% · X: 0% · Y: 0%)
+
+- Card corners: 3% of min(width, height)
+- Stage padding: 6% of min(width, height), inset on every side of the composition
+- Easing (every card move): smooth — easeInOutCubic (t < 0.5 ? 4t³ : 1 − (−2t + 2)³ / 2)
+
+## Host loop (exact — "use client" component, requestAnimationFrame)
+```js
+import TEMPLATE from "./template"; // the engine source below (export default)
+
+const DPR_CAP = 2;
+const LOOP_SECONDS = 28.0;
+const PARAMS = {"cornerRadius":3,"padding":6,"shadowEnabled":false,"turns":3.75,"cardCount":24,"direction":"down","motion":"flow","pulse":60,"ringSize":62,"taper":0,"cardSize":33,"cardAspect":"1:1","cardStyle":"curved","backFade":55,"perspective":20,"tilt":0,"gap":28,"scalePulse":0,"offsetX":0,"offsetY":0,"backgroundType":"color","background":"rgba(0,0,0,0)"};
+const BACKGROUND = {"kind":"colour","value":"#262405"};
+
+// images: one fully LOADED HTMLImageElement per slot, in slot order; a hole is
+// undefined (the template draws a grey placeholder card). Only hand an image
+// to render() after onload — templates cache rendered cards by media identity.
+function mount(container, canvas, images) {
+  const ctx = canvas.getContext("2d");
+  const resize = () => {
+    const dpr = Math.min(window.devicePixelRatio || 1, DPR_CAP);
+    canvas.width = Math.round(container.clientWidth * dpr);   // backing store in device px;
+    canvas.height = Math.round(container.clientHeight * dpr); // CSS size = 100% of container
+  };
+  resize();
+  new ResizeObserver(resize).observe(container);
+
+  let t = 0.12; // the preview starts a little into the loop
+  let last = performance.now();
+  const draw = () => {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    TEMPLATE.render({ ctx, t, width: canvas.width, height: canvas.height, params: PARAMS, images, background: null });
+    paintBehind(ctx, BACKGROUND, canvas.width, canvas.height); // fills BEHIND the cards
+  };
+  const tick = (now) => {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    t = (t + dt / LOOP_SECONDS) % 1; // linear phase, seamless at 1 → 0
+    draw();
+    requestAnimationFrame(tick);
+  };
+  // Reduced motion: one still frame at t = 0.12, redrawn on resize — no loop.
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    draw();
+    new ResizeObserver(draw).observe(container);
+  } else {
+    requestAnimationFrame(tick);
+  }
+}
+
+function paintBehind(ctx, bg, w, h) {
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalCompositeOperation = "destination-over";
+  if (bg.kind === "gradient") {
+    // CSS: 0deg points up, 90deg right; the gradient line spans the box's
+    // projection onto that direction.
+    const a = (bg.angle * Math.PI) / 180;
+    const dx = Math.sin(a);
+    const dy = -Math.cos(a);
+    const half = (Math.abs(w * dx) + Math.abs(h * dy)) / 2;
+    const g = ctx.createLinearGradient(w / 2 - dx * half, h / 2 - dy * half, w / 2 + dx * half, h / 2 + dy * half);
+    g.addColorStop(0, bg.from);
+    g.addColorStop(1, bg.to);
+    ctx.fillStyle = g;
+  } else {
+    ctx.fillStyle = bg.value;
+  }
+  ctx.fillRect(0, 0, w, h);
+  ctx.restore();
+}
+```
+
+## Engine source — verbatim (src/lib/motion-templates), exported as default (Bz)
+Contract: TEMPLATE.render({ ctx, t, width, height, params, images, background }) paints one full frame (it resets the transform and clears/fills first).
+```js
+// ── Shared helpers — src/lib/motion-templates/core.ts (minified names)
+/*
+ * Legend:
+ *   We  clamp01(x)
+ *   xe  remap v from [a,b] to [0,1], clamped
+ *   Mt  (t, n) → { index, local }: which of n steps is running and the progress inside it
+ *   Ci  cubic-bezier easing (Newton + bisection)
+ *   H6  easing table
+ *   w5  pick an easing by name (+ custom amount / bezier)
+ *   H   numeric param (params, id, default)
+ *   he  string param (params, id, default)
+ *   Bm  boolean param (params, id, default)
+ *   k5  u = min(w, h) / 100 — the '1%' unit every size uses
+ *   Xa  rounded-rect path (ctx, x, y, w, h, r)
+ *   Y6  object-fit: cover (+ zoom / pan)
+ *   as  reusable offscreen scratch canvas by key
+ *   M5  card shadow (shadowOffsetX = 1e5 trick: shape drawn off-screen, only its shadow lands)
+ *   Ds  draw media cover-fitted inside a rounded clip
+ *   Re  draw one card (ctx, img, slot, rect, radius, { alpha, shadow, zoom, panX, panY }) — grey placeholder when img is missing
+ *   et  '16:9' / 'auto' → number
+ *   He  frame start: clear, paint background, set shadow, offset → { u, content, radius, ease, shadow }
+ *   je  images[i % images.length]
+ */
+
+function We(t) {
+  return t < 0 ? 0 : t > 1 ? 1 : t;
+}
+
+function xe(t, e, n) {
+  return n <= e ? (t >= n ? 1 : 0) : We((t - e) / (n - e));
+}
+
+function Mt(t, e) {
+  const n = We(t) * e;
+  let a = Math.floor(n);
+  return (a >= e && (a = e - 1), { index: a, local: n - a });
+}
+
+const _5 = (t) => t;
+
+const Va = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+
+const D6 = (t) => (t >= 1 ? 1 : 1 - Math.pow(2, -10 * t));
+
+const Hm = (t) => 1 + 3.2 * Math.pow(t - 1, 3) + 2.2 * Math.pow(t - 1, 2);
+
+const P6 = (t) => {
+  const n = 2.5949095;
+  return t < 0.5
+    ? (Math.pow(2 * t, 2) * ((n + 1) * 2 * t - n)) / 2
+    : (Math.pow(2 * t - 2, 2) * ((n + 1) * (t * 2 - 2) + n) + 2) / 2;
+};
+
+const L6 = (t) =>
+  t < 1 / 2.75
+    ? 7.5625 * t * t
+    : t < 2 / 2.75
+      ? 7.5625 * (t -= 1.5 / 2.75) * t + 0.75
+      : t < 2.5 / 2.75
+        ? 7.5625 * (t -= 2.25 / 2.75) * t + 0.9375
+        : 7.5625 * (t -= 2.625 / 2.75) * t + 0.984375;
+
+const U6 = (t) => {
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
+  const e = (2 * Math.PI) / 3;
+  return Math.pow(2, -10 * t) * Math.sin((t * 10 - 0.75) * e) + 1;
+};
+
+function Ci(t, e, n, a) {
+  const r = 3 * t,
+    o = 3 * (n - t) - r,
+    c = 1 - r - o,
+    d = 3 * e,
+    h = 3 * (a - e) - d,
+    f = 1 - d - h,
+    p = (y) => ((c * y + o) * y + r) * y,
+    m = (y) => ((f * y + h) * y + d) * y,
+    b = (y) => (3 * c * y + 2 * o) * y + r;
+  return (y) => {
+    if (y <= 0) return 0;
+    if (y >= 1) return 1;
+    let _ = y;
+    for (let E = 0; E < 6; E++) {
+      const T = p(_) - y;
+      if (Math.abs(T) < 1e-5) return m(_);
+      const k = b(_);
+      if (Math.abs(k) < 1e-6) break;
+      _ -= T / k;
+    }
+    let x = 0,
+      w = 1;
+    for (_ = y; w - x > 1e-5;) (p(_) < y ? (x = _) : (w = _), (_ = (x + w) / 2));
+    return m(_);
+  };
+}
+
+function I6(t) {
+  const e = t.split(",").map(Number);
+  return e.length !== 4 || e.some(Number.isNaN)
+    ? null
+    : [Math.min(1, Math.max(0, e[0])), e[1], Math.min(1, Math.max(0, e[2])), e[3]];
+}
+
+const H6 = {
+  linear: _5,
+  smooth: Va,
+  natural: Ci(0.4, 0, 0.2, 1),
+  slowdown: Ci(0, 0, 0.35, 1),
+  snappy: D6,
+  accelerate: Ci(0.55, 0, 0.85, 0.3),
+  overshoot: Hm,
+  bounce: L6,
+  elastic: U6,
+  impulse: Ci(0.5, -0.6, 0.3, 1),
+  swing: P6,
+};
+
+function w5(t, e = 60, n = "") {
+  if (t === "custom") {
+    const a = I6(n);
+    if (a) return Ci(...a);
+    const r = Math.max(-100, Math.min(100, e)) / 100;
+    if (r === 0) return _5;
+    const o = 1 + Math.abs(r) * 4;
+    return r > 0 ? (c) => 1 - Math.pow(1 - c, o) : (c) => Math.pow(c, o);
+  }
+  return H6[t] ?? Va;
+}
+
+function H(t, e, n) {
+  const a = t[e];
+  return typeof a == "number" ? a : n;
+}
+
+function he(t, e, n) {
+  const a = t[e];
+  return typeof a == "string" ? a : n;
+}
+
+function Bm(t, e, n) {
+  const a = t[e];
+  return typeof a == "boolean" ? a : n;
+}
+
+function k5(t, e) {
+  return Math.min(t, e) / 100;
+}
+
+function G6(t, e, n) {
+  const a = k5(t, e) * n;
+  return { x: a, y: a, w: t - a * 2, h: e - a * 2 };
+}
+
+function Fm(t) {
+  return "videoWidth" in t ? { w: t.videoWidth, h: t.videoHeight } : { w: t.width, h: t.height };
+}
+
+function Xa(t, e, n, a, r, o) {
+  const c = Math.max(0, Math.min(o, a / 2, r / 2));
+  if ((t.beginPath(), typeof t.roundRect == "function")) {
+    t.roundRect(e, n, a, r, c);
+    return;
+  }
+  (t.moveTo(e + c, n),
+    t.arcTo(e + a, n, e + a, n + r, c),
+    t.arcTo(e + a, n + r, e, n + r, c),
+    t.arcTo(e, n + r, e, n, c),
+    t.arcTo(e, n, e + a, n, c),
+    t.closePath());
+}
+
+function Y6(t, e, n, a, r = 1, o = 0, c = 0) {
+  const d = Math.max(n / t, a / e) * Math.max(r, 1e-4),
+    h = n / d,
+    f = a / d,
+    p = (t - h) / 2,
+    m = (e - f) / 2;
+  return {
+    sx: p * (1 + Math.max(-1, Math.min(1, o))),
+    sy: m * (1 + Math.max(-1, Math.min(1, c))),
+    sw: h,
+    sh: f,
+  };
+}
+
+let jc = null;
+
+function W6(t) {
+  jc = t;
+}
+
+let T5 = !1;
+
+function V6(t) {
+  T5 = t;
+}
+
+function zh(t, e, n, a) {
+  a > 0 && jc && M5(t, e, n, a, jc);
+}
+
+const Qx = new Map();
+
+function as(t, e, n = "card") {
+  const a = Math.max(2, Math.round(t)),
+    r = Math.max(2, Math.round(e));
+  let o = Qx.get(n);
+  if (!o) {
+    let c;
+    if (typeof OffscreenCanvas < "u") c = new OffscreenCanvas(a, r);
+    else if (typeof document < "u") c = document.createElement("canvas");
+    else return null;
+    const d = c.getContext("2d");
+    if (!d) return null;
+    ((o = { canvas: c, ctx: d }), Qx.set(n, o));
+  }
+  (o.canvas.width !== a && (o.canvas.width = a), o.canvas.height !== r && (o.canvas.height = r));
+  try {
+    ((o.ctx.imageSmoothingEnabled = !0), (o.ctx.imageSmoothingQuality = "high"));
+  } catch {}
+  return o;
+}
+
+function M5(t, e, n, a, r) {
+  const o = r.unit > 0 ? a / r.unit : 1;
+  (t.save(), (t.shadowColor = r.color), (t.shadowBlur = r.blur * o));
+  let c = 0,
+    d = 0,
+    h = !1;
+  const f = 1e5;
+  try {
+    const m = t.getTransform(),
+      b = m.a * m.d - m.b * m.c;
+    b && ((c = (-f * m.d) / b), (d = (f * m.b) / b), (h = !0));
+  } catch {}
+  ((t.shadowOffsetX = (h ? f : 0) + r.offX), (t.shadowOffsetY = r.offY));
+  const p = h ? r.spread : Math.min(r.spread, -1);
+  (Xa(t, e.x + c - p, e.y + d - p, Math.max(0, e.w + p * 2), Math.max(0, e.h + p * 2), Math.max(0, n + p)),
+    (t.fillStyle = "#000"),
+    t.fill(),
+    t.restore());
+}
+
+function qm(t, e, n, a) {
+  (t.save(), Xa(t, e.x, e.y, e.w, e.h, n), t.clip());
+  const r = 30 + ((a * 11) % 30);
+  ((t.fillStyle = `hsl(230, 6%, ${r}%)`), t.fillRect(e.x, e.y, e.w, e.h), t.restore());
+}
+
+function Ds(t, e, n, a, r = {}) {
+  if (n.w <= 0 || n.h <= 0) return;
+  const o = r.alpha ?? 1;
+  if (o <= 0) return;
+  const c = e ? Fm(e) : null;
+  if (!e || !c || c.w <= 0 || c.h <= 0) {
+    (t.save(), (t.globalAlpha *= o), qm(t, n, a, 0), t.restore());
+    return;
+  }
+  const d = Y6(c.w, c.h, n.w, n.h, r.zoom, r.panX, r.panY);
+  (t.save(),
+    (t.globalAlpha *= o),
+    Xa(t, n.x, n.y, n.w, n.h, a),
+    t.clip(),
+    t.drawImage(e, d.sx, d.sy, d.sw, d.sh, n.x, n.y, n.w, n.h),
+    t.restore());
+}
+
+function Re(t, e, n, a, r, o = {}) {
+  if (a.w <= 0 || a.h <= 0) return;
+  const c = o.alpha ?? 1;
+  if (c <= 0) return;
+  const d = e ? Fm(e) : null,
+    h = e && d && d.w > 0 && d.h > 0;
+  if (T5 && h) {
+    const f = d.w / d.h;
+    let p = a.w,
+      m = a.h;
+    (p / m > f ? (p = m * f) : (m = p / f),
+      (a = { x: a.x + (a.w - p) / 2, y: a.y + (a.h - m) / 2, w: p, h: m }));
+  }
+  (t.save(),
+    (t.globalAlpha *= c),
+    o.shadow && o.shadow > 0 && jc && M5(t, a, r, o.shadow, jc),
+    h ? Ds(t, e, a, r, { zoom: o.zoom, panX: o.panX, panY: o.panY }) : qm(t, a, r, n),
+    t.restore());
+}
+
+const om = [
+  {
+    id: "dusk",
+    label: "Dusk",
+    angle: 135,
+    stops: [
+      { at: 0, color: "#2b1055" },
+      { at: 1, color: "#7597de" },
+    ],
+  },
+  {
+    id: "ember",
+    label: "Ember",
+    angle: 135,
+    stops: [
+      { at: 0, color: "#f12711" },
+      { at: 1, color: "#f5af19" },
+    ],
+  },
+  {
+    id: "mint",
+    label: "Mint",
+    angle: 135,
+    stops: [
+      { at: 0, color: "#0f2027" },
+      { at: 0.5, color: "#203a43" },
+      { at: 1, color: "#2c5364" },
+    ],
+  },
+  {
+    id: "grape",
+    label: "Grape",
+    angle: 135,
+    stops: [
+      { at: 0, color: "#41295a" },
+      { at: 1, color: "#2f0743" },
+    ],
+  },
+  {
+    id: "peach",
+    label: "Peach",
+    angle: 135,
+    stops: [
+      { at: 0, color: "#ee9ca7" },
+      { at: 1, color: "#ffdde1" },
+    ],
+  },
+  {
+    id: "slate",
+    label: "Slate",
+    angle: 135,
+    stops: [
+      { at: 0, color: "#232526" },
+      { at: 1, color: "#414345" },
+    ],
+  },
+  {
+    id: "halo",
+    label: "Halo",
+    angle: 0,
+    radial: !0,
+    stops: [
+      { at: 0, color: "#3a3a5a" },
+      { at: 1, color: "#0d0d14" },
+    ],
+  },
+];
+
+function X6(t) {
+  return om.find((e) => e.id === t);
+}
+
+function J6(t) {
+  try {
+    const e = JSON.parse(t);
+    if (!e || !Array.isArray(e.stops) || e.stops.length < 2) return null;
+    const n = e.stops
+      .filter((a) => a && typeof a.color == "string")
+      .map((a) => ({ at: Math.min(1, Math.max(0, Number(a.at) || 0)), color: a.color }));
+    return n.length < 2
+      ? null
+      : { id: "custom", label: "Custom", angle: Number(e.angle) || 0, radial: !!e.radial, stops: n };
+  } catch {
+    return null;
+  }
+}
+
+function Z6(t, e, n, a) {
+  let r;
+  if (a.radial) {
+    const o = Math.hypot(e, n) / 2;
+    r = t.createRadialGradient(e / 2, n / 2, 0, e / 2, n / 2, o);
+  } else {
+    const o = (a.angle * Math.PI) / 180,
+      c = e / 2,
+      d = n / 2,
+      h = (Math.abs(Math.cos(o)) * e + Math.abs(Math.sin(o)) * n) / 2,
+      f = Math.cos(o) * h,
+      p = Math.sin(o) * h;
+    r = t.createLinearGradient(c - f, d - p, c + f, d + p);
+  }
+  for (const o of a.stops) r.addColorStop(o.at, o.color);
+  ((t.fillStyle = r), t.fillRect(0, 0, e, n));
+}
+
+const nn = [
+  {
+    type: "number",
+    id: "offsetX",
+    label: "X",
+    default: 0,
+    min: -50,
+    max: 50,
+    step: 1,
+    snap: 0,
+    unit: "%",
+    group: "Position",
+  },
+  {
+    type: "number",
+    id: "offsetY",
+    label: "Y",
+    default: 0,
+    min: -50,
+    max: 50,
+    step: 1,
+    snap: 0,
+    unit: "%",
+    group: "Position",
+  },
+];
+
+const Q6 = [
+  { value: "1:1", label: "1:1" },
+  { value: "4:3", label: "4:3" },
+  { value: "3:4", label: "3:4" },
+  { value: "4:5", label: "4:5" },
+  { value: "16:9", label: "16:9" },
+  { value: "9:16", label: "9:16" },
+];
+
+const it = [{ value: "auto", label: "Auto" }, ...Q6];
+
+const ez = 0.25;
+
+const tz = 4;
+
+function nz(t) {
+  if (!t) return 1;
+  for (const e of t.images) {
+    if (!e) continue;
+    const { w: n, h: a } = Fm(e);
+    if (n > 0 && a > 0) return Math.min(Math.max(n / a, ez), tz);
+  }
+  return 1;
+}
+
+function et(t, e) {
+  if (t === "auto") return nz(e);
+  switch (t) {
+    case "4:3":
+      return 4 / 3;
+    case "3:4":
+      return 3 / 4;
+    case "16:9":
+      return 16 / 9;
+    case "9:16":
+      return 9 / 16;
+    case "4:5":
+      return 4 / 5;
+    case "5:4":
+      return 5 / 4;
+    case "1:1":
+    default:
+      return 1;
+  }
+}
+
+function sz(t, e) {
+  const n = /^#?([0-9a-f]{6})$/i.exec(t.trim());
+  if (!n) return `rgba(0,0,0,${e})`;
+  const a = parseInt(n[1], 16);
+  return `rgba(${(a >> 16) & 255},${(a >> 8) & 255},${a & 255},${e})`;
+}
+
+function He(t) {
+  const { ctx: e, width: n, height: a, params: r } = t;
+  try {
+    ((e.imageSmoothingEnabled = !0), (e.imageSmoothingQuality = "high"));
+  } catch {}
+  (e.setTransform(1, 0, 0, 1, 0, 0),
+    e.clearRect(0, 0, n, a),
+    (e.fillStyle = he(r, "background", "#101014")),
+    e.fillRect(0, 0, n, a));
+  const o = he(r, "backgroundType", "color");
+  if (o === "gradient") {
+    const p = he(r, "backgroundGradient", ""),
+      m = p === "custom" ? J6(he(r, "backgroundGradientCustom", "")) : X6(p);
+    m && Z6(e, n, a, m);
+  } else
+    (o === "image" || o === "preset") && t.background && Ds(e, t.background, { x: 0, y: 0, w: n, h: a }, 0);
+  const c = k5(n, a),
+    d = Bm(r, "shadowEnabled", !1);
+  (W6(
+    d
+      ? {
+          offX: c * H(r, "shadowX", 0),
+          offY: c * H(r, "shadowY", 1),
+          blur: c * H(r, "shadowBlur", 1.5),
+          spread: c * H(r, "shadowSpread", -0.25),
+          color: sz(he(r, "shadowColor", "#000000"), H(r, "shadowOpacity", 40) / 100),
+          unit: c,
+        }
+      : null,
+  ),
+    V6(he(r, "cardAspect", "") === "auto"));
+  const h = c * H(r, "offsetX", 0),
+    f = c * H(r, "offsetY", 0);
+  return (
+    (h || f) && e.translate(h, f),
+    {
+      u: c,
+      content: G6(n, a, H(r, "padding", 6)),
+      radius: c * H(r, "cornerRadius", 3),
+      easeName: he(r, "easing", "smooth"),
+      ease: w5(he(r, "easing", "smooth"), H(r, "easeAmount", 60), he(r, "easeBezier", "")),
+      shadow: d ? c : 0,
+    }
+  );
+}
+
+function je(t, e) {
+  return t.images[e % t.images.length] ?? null;
+}
+
+// ── The template — src/lib/motion-templates/presets/01-3d-and-perspective/spiral-stream.ts
+
+const Hz = 12;
+
+const Bz = {
+  id: "spiral-stream",
+  name: "Helix",
+  description: "Cards descend a vertical helix, winding round as they fall.",
+  slotCount: Hz,
+  slotRange: { min: 6, max: 20 },
+  defaultDuration: 28,
+  params: [
+    { type: "number", id: "turns", label: "Spiral turns", default: 3.75, min: 1, max: 6, step: 0.25 },
+    { type: "number", id: "cardCount", label: "Card count", default: 24, min: 8, max: 48, step: 1 },
+    {
+      type: "select",
+      id: "direction",
+      label: "Direction",
+      default: "down",
+      options: [
+        { value: "down", label: "Downward" },
+        { value: "up", label: "Upward" },
+      ],
+    },
+    {
+      type: "select",
+      id: "motion",
+      label: "Motion",
+      default: "flow",
+      options: [
+        { value: "flow", label: "Continuous" },
+        { value: "pulse", label: "Fast–slow–fast" },
+        { value: "steps", label: "Step per card" },
+      ],
+    },
+    {
+      type: "number",
+      id: "pulse",
+      label: "Pulse strength",
+      default: 60,
+      min: 10,
+      max: 90,
+      step: 5,
+      unit: "%",
+      visibleIf: { id: "motion", values: ["pulse"] },
+    },
+    {
+      type: "number",
+      id: "ringSize",
+      label: "Spiral size",
+      default: 62,
+      min: 35,
+      max: 90,
+      step: 1,
+      unit: "%",
+    },
+    { type: "number", id: "taper", label: "Taper", default: 0, min: -90, max: 90, step: 5, unit: "%" },
+    {
+      type: "number",
+      id: "cardSize",
+      label: "Card size",
+      default: 33,
+      min: 12,
+      max: 36,
+      step: 1,
+      unit: "%",
+    },
+    { type: "select", id: "cardAspect", label: "Card ratio", default: "1:1", options: it },
+    {
+      type: "select",
+      id: "cardStyle",
+      label: "Card style",
+      default: "curved",
+      options: [
+        { value: "curved", label: "Curved (3D bend)" },
+        { value: "upright", label: "Upright (flat)" },
+      ],
+    },
+    {
+      type: "number",
+      id: "backFade",
+      label: "Back fade",
+      default: 55,
+      min: 10,
+      max: 95,
+      step: 5,
+      unit: "%",
+    },
+    {
+      type: "number",
+      id: "perspective",
+      label: "Perspective",
+      default: 20,
+      min: 0,
+      max: 40,
+      step: 2,
+      unit: "%",
+    },
+    { type: "number", id: "tilt", label: "Ring tilt", default: 0, min: -45, max: 45, step: 1, unit: "°" },
+    { type: "number", id: "gap", label: "Card gap", default: 28, min: 0, max: 50, step: 2, unit: "%" },
+    {
+      type: "number",
+      id: "scalePulse",
+      label: "Scale pulse",
+      default: 0,
+      min: 0,
+      max: 60,
+      step: 5,
+      unit: "%",
+    },
+    ...nn,
+  ],
+  render(t) {
+    const { ctx: e, t: n, width: a, height: r, params: o } = t,
+      c = He(t),
+      d = Math.round(H(o, "cardCount", 24)),
+      h = H(o, "turns", 1.75),
+      f = he(o, "direction", "down") === "down" ? 1 : -1,
+      p = (c.content.w / 2) * (H(o, "ringSize", 62) / 100),
+      m = c.u * H(o, "cardSize", 24),
+      b = m / et(he(o, "cardAspect", "1:1"), t),
+      y = 1 - H(o, "backFade", 55) / 100,
+      _ = H(o, "perspective", 20) / 100,
+      x = he(o, "cardStyle", "curved") === "upright",
+      w = (H(o, "tilt", 0) * Math.PI) / 180,
+      E = Math.cos(w),
+      T = Math.sin(w),
+      k = 1 - H(o, "gap", 0) / 100,
+      A = H(o, "scalePulse", 0) / 100,
+      C = c.radius * 1.2,
+      I = he(o, "motion", "flow");
+    let z = n;
+    if (I === "pulse") {
+      const V = H(o, "pulse", 60) / 100;
+      z = n + (V / (2 * Math.PI)) * Math.sin(2 * Math.PI * n);
+    } else if (I === "steps") {
+      const { index: V, local: K } = Mt(n, d);
+      z = (V + c.ease(xe(K, 0, 0.55))) / d;
+    }
+    const B = a / 2,
+      O = r / 2,
+      $ = Math.max(1, (Math.abs(a * T) + Math.abs(r * E) + 2 * b) / Math.max(0.2, 1 - _)),
+      L = $ / (2 * Math.PI * h * Math.max(1, p)),
+      X = H(o, "taper", 0) / 100,
+      Y = (V) => {
+        const K = We(V / $ + 0.5);
+        return p * (1 - (X > 0 ? X * (1 - K) : -X * K));
+      },
+      F = (V, K) => {
+        const M = Math.cos(V),
+          U = 1 + _ * M;
+        return { sx: Y(K) * Math.sin(V), sy: K, tanX: Math.cos(V), tanY: L, dNorm: M, p: U };
+      },
+      Q = (V) => {
+        (e.translate(B + V.sx * V.p, O + V.sy * V.p), e.transform(V.tanX * V.p, V.tanY * V.p, 0, V.p, 0, 0));
+      },
+      P = Array.from({ length: d }, (V, K) => {
+        const M = (((K / d + f * z) % 1) + 1) % 1,
+          U = 2 * Math.PI * h * (M - 0.5),
+          N = (M - 0.5) * $;
+        return { k: K, s: M, phi: U, y: N, center: F(U, N) };
+      }).sort((V, K) => V.center.dNorm - K.center.dNorm),
+      q = (Math.abs(a * T) + Math.abs(r * E)) / 2 + b,
+      W = as(m, b);
+    (e.save(), !x && w !== 0 && (e.translate(B, O), e.rotate(w), e.translate(-B, -O)));
+    for (const V of P) {
+      if (Math.abs(V.y) * (1 - _) > q) continue;
+      const K = je(t, V.k),
+        M = y + (1 - y) * We((V.center.dNorm + 0.3) / 0.6),
+        U = V.center.p,
+        N = k * (1 + A * We(V.center.dNorm)) * (Y(V.y) / Math.max(1, p)),
+        j = m * N,
+        Z = b * N,
+        ne = { x: -j / 2, y: -Z / 2, w: j, h: Z };
+      if (V.center.dNorm > 0.35 && c.shadow > 0) {
+        if ((e.save(), x)) {
+          const be = V.center.sx * U,
+            Ee = V.center.sy * U;
+          (e.translate(B + be * E - Ee * T, O + be * T + Ee * E), e.scale(U, U));
+        } else Q(V.center);
+        (zh(e, ne, C, c.shadow * 2 * (V.center.dNorm - 0.35)), e.restore());
+      }
+      if (x) {
+        const be = j * U,
+          Ee = Z * U,
+          ye = V.center.sx * U,
+          ke = V.center.sy * U,
+          Te = B + ye * E - ke * T,
+          Se = O + ye * T + ke * E;
+        Re(e, K, V.k, { x: Te - be / 2, y: Se - Ee / 2, w: be, h: Ee }, C, { alpha: M });
+        continue;
+      }
+      if (!W) {
+        (e.save(), (e.globalAlpha *= M), Q(V.center), Re(e, K, V.k, ne, C, {}), e.restore());
+        continue;
+      }
+      const le = W.canvas.width,
+        te = W.canvas.height;
+      (W.ctx.clearRect(0, 0, le, te),
+        Re(W.ctx, K, V.k, { x: 0, y: 0, w: le, h: te }, C),
+        M < 0.999 &&
+          (W.ctx.save(),
+          (W.ctx.globalCompositeOperation = "source-atop"),
+          (W.ctx.fillStyle = `rgba(0,0,0,${1 - M})`),
+          W.ctx.fillRect(0, 0, le, te),
+          W.ctx.restore()));
+      const se = Math.min(60, Math.max(12, Math.round(j / 4))),
+        re = Z / 2,
+        fe = Math.max(1, Y(V.y)),
+        ge = (be) => {
+          const Ee = F(V.phi + be / fe, V.y + be * L);
+          return { x: B + Ee.sx * Ee.p, y: O + Ee.sy * Ee.p, p: Ee.p };
+        };
+      let _e = ge(-j / 2);
+      for (let be = 0; be < se; be++) {
+        const Ee = ge(-j / 2 + ((be + 1) * j) / se),
+          ye = _e.x,
+          ke = _e.y - re * _e.p,
+          Te = _e.y + re * _e.p,
+          Se = Ee.x,
+          $e = Ee.y - re * Ee.p;
+        _e = Ee;
+        const Fe = (le * be) / se,
+          Ge = le / se,
+          Ze = Ge * 0.75;
+        (e.save(),
+          e.transform((Se - ye) / Ge, ($e - ke) / Ge, 0, (Te - ke) / te, ye, ke),
+          e.drawImage(W.canvas, Fe, 0, Ge + Ze, te, 0, 0, Ge + Ze, te),
+          e.restore());
+      }
+    }
+    e.restore();
+  },
+};
+
+export default Bz;
+```
