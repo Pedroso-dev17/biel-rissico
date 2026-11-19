@@ -1,0 +1,15 @@
+<svg viewBox="0 0 980 580" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Desenhos gestuais abstratos inspirados em grafite de rua">
+ <g fill="none" stroke="#f4bd5e" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M50 360 C108 300 131 120 277 112 S450 150 490 232 S582 393 735 358 S908 167 951 115" stroke-width="7" opacity=".48" />
+  <path d="M53 376 C171 275 155 130 273 132" stroke-width="2" opacity=".6" />
+  <path d="M592 85 C645 90 729 61 791 101 C864 151 855 275 789 302" stroke-width="4" stroke-dasharray="7 19" opacity=".6"/>
+  <path d="M683 174 l49 -48 m-43 12 57 28" stroke-width="9" opacity=".7" />
+  <path d="M222 420 l43 -15 -15 38 m-10 -35 37 58" stroke-width="5" opacity=".7" />
+  <path d="M866 391 q29 -73 79 -57 l-15 29 m15-29 -33 -7" stroke-width="6" opacity=".8"/>
+  <path d="M492 486 C563 438 599 500 677 466" stroke-width="3" opacity=".65" />
+  <circle cx="95" cy="140" r="6" fill="#f4bd5e" stroke="none"/>
+  <circle cx="108" cy="140" r="2" fill="#f4bd5e" stroke="none"/>
+  <path d="M129 163 l19 -19 m-18 -2 19 21" stroke-width="4" opacity=".5"/>
+ </g>
+ <g fill="#f4bd5e" opacity=".45" font-family="monospace" font-size="13" font-weight="800" letter-spacing="4"><text x="63" y="99" transform="rotate(-8 63 99)">NO FILTER / 001</text><text x="656" y="507" transform="rotate(-6 656 507)">MAKE IT FELT.</text></g>
+</svg>

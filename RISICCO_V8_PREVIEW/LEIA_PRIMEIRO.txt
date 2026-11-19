@@ -1,0 +1,9 @@
+RISICCO V8 — DEMONSTRAÇÃO OFFLINE
+
+1. Extrai o ZIP inteiro.
+2. Abre index.html diretamente no navegador.
+3. Navega pelas páginas: CSS, JavaScript e imagens são locais e funcionam sem servidor.
+4. Para testes de login, dashboard e dados reais, usa o projeto PHP com MySQL; a demo HTML estática não guarda contas nem dados.
+5. A personalização visual funciona mesmo sem conta e guarda as preferências neste navegador.
+
+Nesta demo, formulários de login e contacto são apenas ilustrativos.

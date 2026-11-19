@@ -1,0 +1,119 @@
+/* RISICCO V3 | Living Cinema — the intro is only the first scene. */
+:root{--cinema-px:50vw;--cinema-py:40vh;--cinema-ease:cubic-bezier(.18,1,.28,1)}
+.cinema-ambient{position:fixed;inset:0;pointer-events:none;z-index:2;overflow:hidden;isolation:isolate;opacity:.42;transition:opacity .6s ease}
+.cinema-ambient-orb{position:absolute;width:min(66vw,900px);aspect-ratio:1;border-radius:50%;filter:blur(85px);opacity:.17;mix-blend-mode:screen;will-change:transform;transform:translateZ(0);background:radial-gradient(circle,var(--accent) 0,transparent 67%)}
+.cinema-ambient-orb.orb-a{left:-24%;top:-38%;animation:cinemaDriftA 24s ease-in-out infinite alternate}
+.cinema-ambient-orb.orb-b{right:-31%;bottom:-39%;opacity:.12;animation:cinemaDriftB 30s ease-in-out infinite alternate}
+.cinema-scanbeam{position:absolute;inset:0;opacity:.4;background:radial-gradient(ellipse 450px 340px at var(--cinema-px) var(--cinema-py),color-mix(in srgb,var(--accent),transparent 91%),transparent 85%);transition:opacity .5s}
+@keyframes cinemaDriftA{from{transform:translate3d(0,0,0) scale(1)}to{transform:translate3d(28vw,20vh,0) scale(1.26)}}
+@keyframes cinemaDriftB{from{transform:translate3d(0,0,0) scale(1.1)}to{transform:translate3d(-22vw,-16vh,0) scale(.91)}}
+.cinema-edge{position:fixed;z-index:50;pointer-events:none;left:0;top:0;bottom:0;width:14px;border-right:1px solid color-mix(in srgb,var(--accent),transparent 60%);overflow:hidden;opacity:.57}
+.cinema-edge-reel{position:absolute;inset:-120px 3px;background:repeating-linear-gradient(to bottom,transparent 0 14px,var(--accent) 14px 22px,transparent 22px 46px);mask-image:linear-gradient(to bottom,transparent,#000 12%,#000 88%,transparent);animation:cinemaReel 8s linear infinite}
+@keyframes cinemaReel{to{transform:translateY(92px)}}
+.cinema-scene-index{position:fixed;z-index:35;left:32px;bottom:28px;display:flex;gap:13px;align-items:center;pointer-events:none;font:9px var(--mono,monospace);letter-spacing:.13em;color:var(--muted);text-shadow:0 1px 4px var(--bg);mix-blend-mode:normal;opacity:.72}
+.cinema-scene-index b{font-weight:500;color:var(--accent)}
+.cinema-scene-track{display:block;width:65px;height:1px;background:color-mix(in srgb,var(--accent),transparent 75%);position:relative}
+.cinema-scene-track i{display:block;width:100%;height:2px;transform-origin:left;transform:scaleX(0);background:var(--accent);transition:transform .15s linear}
+.cinema-scene-name{white-space:nowrap;font-size:8px}
+/* Slow, persistent imagery after the introduction completes. */
+.home-hero{isolation:isolate;--hero-perspective-x:0deg;--hero-perspective-y:0deg;--hero-shift-x:0px;--hero-shift-y:0px}
+.cinema-hero-rings{position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden;opacity:.35}
+.cinema-hero-rings i{position:absolute;left:55%;top:25%;display:block;border:1px solid color-mix(in srgb,var(--accent),transparent 72%);border-radius:50%;width:80vw;aspect-ratio:1;transform:translate(-50%,-50%);animation:cinemaOrbit 21s linear infinite}
+.cinema-hero-rings i:nth-child(2){width:65vw;border-style:dashed;animation-duration:35s;animation-direction:reverse;opacity:.4}
+.cinema-hero-rings i:nth-child(3){width:46vw;border-width:2px;opacity:.17;animation-duration:27s}
+.cinema-travel-lines{position:absolute;inset:0;pointer-events:none;z-index:0;opacity:.19;background:repeating-linear-gradient(155deg,transparent 0 78px,color-mix(in srgb,var(--accent),transparent 87%) 79px,transparent 80px 138px);mask-image:linear-gradient(to right,transparent 15%,#000 80%);background-size:240% 240%;animation:cinemaTravel 24s linear infinite}
+@keyframes cinemaOrbit{to{transform:translate(-50%,-50%) rotate(360deg)}}
+@keyframes cinemaTravel{to{background-position:300px -400px}}
+.hero-art-frame{transform:perspective(1300px) rotateX(var(--hero-perspective-x)) rotateY(var(--hero-perspective-y));transition:transform .4s ease-out;transform-style:preserve-3d}
+.hero-art-frame img{animation:cinemaBreathe 11s ease-in-out infinite alternate;transform-origin:50% 50%}
+@keyframes cinemaBreathe{from{transform:scale(1)}to{transform:scale(1.055)}}
+.hero-art-tag,.hero-art-sticker,.statement-stamp{animation:cinemaFloat 6.5s ease-in-out infinite;animation-delay:var(--float-offset,0s)}
+@keyframes cinemaFloat{0%,100%{translate:0 0}50%{translate:0 -10px}}
+.statement-stamp img,.footer-word span,.site-header .wordmark img{animation:cinemaTurn 16s linear infinite}
+@keyframes cinemaTurn{to{rotate:360deg}}
+.site-header .wordmark img{animation-duration:18s;transform-origin:50% 50%}
+.site-header{backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+/* Editorial masks/words retain the exact original semantics and content. */
+.cinema-word{display:inline-block;overflow:hidden;vertical-align:bottom;max-width:100%;padding-bottom:.035em;margin-bottom:-.035em}
+.cinema-word-inner{display:inline-block;white-space:pre;transition:transform 900ms var(--cinema-ease),opacity 850ms ease,filter 900ms ease;transition-delay:var(--word-delay,0ms)}
+html[data-kinetic='on'] .cinema-word-inner{transform:translate3d(0,112%,0) skewY(7deg);opacity:0;filter:blur(6px)}
+html[data-kinetic='on'] .cinema-words-visible .cinema-word-inner{transform:translate3d(0,0,0) skewY(0);opacity:1;filter:blur(0)}
+/* Staggered scene entrances—only added to elements detected by JavaScript. */
+.cinema-reveal{opacity:0;transform:translate3d(0,36px,0) scale(.985);filter:blur(4px);transition:opacity .8s var(--cinema-ease),transform 1s var(--cinema-ease),filter .8s ease;transition-delay:var(--cinema-stagger,0ms)}
+.cinema-reveal.cinema-in{opacity:1;transform:translate3d(0,0,0) scale(1);filter:blur(0)}
+/* Immersive card tilt & reflective glow based on actual pointer position. */
+.cinema-tilt{--card-rx:0deg;--card-ry:0deg;--card-x:50%;--card-y:50%;transform-style:preserve-3d;perspective:1300px;position:relative}
+.cinema-tilt > .work-media,.cinema-tilt > .service-tile-art,.cinema-tilt > .member-art,.cinema-tilt > .team-mini-art,.cinema-tilt > .dash-project-art{transform:rotateX(var(--card-rx)) rotateY(var(--card-ry));transition:transform .35s cubic-bezier(.23,1,.32,1);transform-style:preserve-3d}
+.cinema-tilt:is(.work-card,.service-tile,.member-card,.team-mini,.dash-project-card)::after{content:'';position:absolute;inset:0;pointer-events:none;z-index:4;background:radial-gradient(340px circle at var(--card-x) var(--card-y),color-mix(in srgb,var(--accent),transparent 92%),transparent 80%);opacity:0;transition:opacity .4s}
+.cinema-tilt:is(.work-card,.service-tile,.member-card,.team-mini,.dash-project-card):hover::after{opacity:.8}
+.cinema-tilt:is(.work-card,.member-card,.team-mini,.dash-project-card):focus-within::after{opacity:.35}
+/* The interaction itself creates energy through light streaks. */
+.service-row::after{content:'';position:absolute;inset:0;pointer-events:none;background:linear-gradient(106deg,transparent 0%,transparent 40%,color-mix(in srgb,var(--accent),transparent 83%) 50%,transparent 59%);background-size:240% 100%;background-position:130% center;transition:background-position .8s var(--cinema-ease)}
+.service-row:is(:hover,:focus-visible)::after{background-position:-70% center}
+.service-tile-art .tile-rings{animation:cinemaTileSpin 22s linear infinite}
+@keyframes cinemaTileSpin{to{rotate:360deg}}
+.work-media .work-orb{animation:cinemaOrbPulse 7s ease-in-out infinite alternate}
+@keyframes cinemaOrbPulse{from{translate:0 0;scale:.97}to{translate:4% -4%;scale:1.1}}
+.process-steps>div:hover{background:color-mix(in srgb,var(--accent),transparent 95%);transition:background .6s}
+/* Client motion: real server stages/data, no fabricated metrics. */
+.dash-online-dot{animation:cinemaOnline 2.7s ease-in-out infinite}
+@keyframes cinemaOnline{50%{box-shadow:0 0 0 9px color-mix(in srgb,var(--accent),transparent 97%),0 0 20px var(--accent)}}
+.dash-progress-track i{transform-origin:left;transform:scaleX(0);transition:transform 1.5s var(--cinema-ease) .1s}
+.dash-progress-track.cinema-progress-active i{transform:scaleX(1)}
+.dash-project-art .dash-art-glyph{animation:cinemaFloat 6.5s ease-in-out infinite}
+.dash-project-card:hover .dash-art-glyph{animation-duration:3.6s}
+.dash-pill-dot{animation:cinemaOnline 3.5s ease-in-out infinite}
+.dash-detail-cover img{animation:cinemaSlowSpin 28s linear infinite}
+@keyframes cinemaSlowSpin{to{transform:rotate(360deg)}}
+.dash-timeline-item.working .dash-timeline-mark{animation:cinemaOnline 3s ease-in-out infinite}
+/* Login remains fully usable as a real form; ambient orbit only decorative. */
+.auth-art .auth-reel{animation:cinemaLoginHover 8s ease-in-out infinite alternate}
+@keyframes cinemaLoginHover{from{translate:0 0;filter:drop-shadow(0 2px 20px transparent)}to{translate:0 -10px;filter:drop-shadow(0 2px 25px color-mix(in srgb,var(--accent),transparent 63%))}}
+/* Balanced/subtle/off settings explicitly scale ongoing and interactive motion. */
+html[data-motion='balanced'] .cinema-ambient-orb{animation-duration:35s;opacity:.11}
+html[data-motion='balanced'] .hero-art-frame img{animation-duration:20s}
+html[data-motion='subtle'] .cinema-ambient{opacity:.14}
+html[data-motion='subtle'] .cinema-hero-rings,html[data-motion='subtle'] .cinema-travel-lines,html[data-motion='subtle'] .cinema-edge{display:none}
+html[data-motion='subtle'] .cinema-ambient-orb,html[data-motion='subtle'] .hero-art-frame img,html[data-motion='subtle'] .auth-reel{animation:none}
+html[data-motion='subtle'] .cinema-reveal{transition-duration:.32s;transform:none;filter:none}
+html[data-motion='off'] .cinema-ambient,html[data-motion='off'] .cinema-hero-rings,html[data-motion='off'] .cinema-travel-lines,html[data-motion='off'] .cinema-edge,html[data-ambient='off'] .cinema-ambient,html[data-ambient='off'] .cinema-hero-rings,html[data-ambient='off'] .cinema-travel-lines{display:none!important}
+html[data-motion='off'] .cinema-reveal{opacity:1!important;transform:none!important;filter:none!important}
+html[data-motion='off'] .cinema-word-inner,html[data-kinetic='off'] .cinema-word-inner{opacity:1!important;transform:none!important;filter:none!important;transition:none!important}
+html[data-motion='off'] .hero-art-frame img,html[data-motion='off'] .site-header .wordmark img,html[data-motion='off'] .auth-reel,html[data-motion='off'] .statement-stamp img,html[data-motion='off'] .dash-detail-cover img,html[data-motion='off'] .dash-pill-dot,html[data-motion='off'] .dash-online-dot,html[data-motion='off'] .dash-art-glyph,html[data-motion='off'] .tile-rings,html[data-motion='off'] .work-orb,html[data-motion='off'] .hero-art-tag,html[data-motion='off'] .hero-art-sticker,html[data-motion='off'] .statement-stamp{animation:none!important}
+html[data-tilt='off'] .cinema-tilt > .work-media,html[data-tilt='off'] .cinema-tilt > .service-tile-art,html[data-tilt='off'] .cinema-tilt > .member-art,html[data-tilt='off'] .cinema-tilt > .team-mini-art,html[data-tilt='off'] .cinema-tilt > .dash-project-art{transform:none!important}
+html[data-tilt='off'] .cinema-tilt::after,html[data-motion='off'] .cinema-tilt::after{display:none!important}
+html[data-motion='off'] .dash-progress-track i{transform:scaleX(1)!important}
+html[data-theme='light'] .cinema-ambient-orb{mix-blend-mode:multiply;opacity:.07}
+@media(max-width:1100px){.cinema-edge,.cinema-scene-index{display:none}.cinema-hero-rings i{left:70%;top:36%;width:140vw}.cinema-ambient{opacity:.27}}
+@media(max-width:760px){.cinema-ambient{opacity:.14}.cinema-ambient-orb{filter:blur(55px);width:105vw}.cinema-travel-lines{opacity:.08}.hero-art-frame{transform:none!important}.cinema-tilt>*{transform:none!important}.cinema-reveal{transform:translateY(18px)}.cinema-reveal.cinema-in{transform:none}}
+@media(prefers-reduced-motion:reduce){.cinema-ambient,.cinema-hero-rings,.cinema-travel-lines,.cinema-edge,.cinema-scene-index{display:none!important}.cinema-reveal{opacity:1!important;filter:none!important;transform:none!important}.cinema-word-inner,.cinema-tilt>*{transform:none!important;opacity:1!important;filter:none!important}.dash-progress-track i{transform:scaleX(1)!important}}
+
+/* Only used by static preview pages; never implies an authenticated client. */
+.v3-preview-note{position:relative;z-index:11;background:color-mix(in srgb,var(--accent),transparent 96%);border-top:1px solid var(--line);padding:17px clamp(18px,4vw,76px);display:flex;align-items:center;flex-wrap:wrap;gap:13px;color:var(--muted);font:10px var(--mono);letter-spacing:.04em}
+.v3-preview-note span:first-child{color:var(--accent);font-weight:700}
+.v3-preview-note a{color:var(--ink);border-bottom:1px solid var(--accent);margin-left:auto}
+
+/* Continuity shot: animated entrance to EVERY inner page; no clicks blocked. */
+.cinema-arrival{position:fixed;inset:0;z-index:490;pointer-events:none;overflow:hidden;isolation:isolate}
+.cinema-arrival-upper,.cinema-arrival-lower{position:absolute;left:-3%;right:-3%;height:52%;background:var(--accent);will-change:transform}
+.cinema-arrival-upper{top:-1%;transform:translateX(0);clip-path:polygon(0 0,100% 0,100% 100%,0 85%)}
+.cinema-arrival-lower{bottom:-1%;background:#11100e;transform:translateX(0);clip-path:polygon(0 0,100% 15%,100% 100%,0 100%)}
+.cinema-arrival-mark{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:1;display:flex;align-items:center;gap:15px;color:#111;white-space:nowrap;opacity:1;font:10px var(--mono);letter-spacing:.16em}
+.cinema-arrival-mark span{font:800 clamp(45px,7vw,110px) var(--heading);line-height:1}
+.cinema-arrival-play .cinema-arrival-upper{animation:cinemaCurtainLeft .85s .12s cubic-bezier(.76,0,.19,1) both}
+.cinema-arrival-play .cinema-arrival-lower{animation:cinemaCurtainRight .9s .14s cubic-bezier(.76,0,.19,1) both}
+.cinema-arrival-play .cinema-arrival-mark{animation:cinemaMarkFade .53s .1s ease forwards}
+@keyframes cinemaCurtainLeft{to{transform:translateX(-111%)}}
+@keyframes cinemaCurtainRight{to{transform:translateX(111%)}}
+@keyframes cinemaMarkFade{30%{opacity:1;transform:translate(-50%,-50%) scale(1.08)}to{opacity:0;transform:translate(-50%,-48%) scale(1.25)}}
+.filter-item:not([hidden]) .work-card,.dash-project-card:not([hidden]){animation:cinemaFilterIn .58s var(--cinema-ease) both}
+@keyframes cinemaFilterIn{from{opacity:.2;filter:blur(3px);translate:0 12px}to{opacity:1;filter:blur(0);translate:0 0}}
+html[data-motion='off'] .cinema-arrival,html[data-motion='off'] .filter-item:not([hidden]) .work-card,html[data-motion='off'] .dash-project-card:not([hidden]){animation:none!important}
+@media(prefers-reduced-motion:reduce){.cinema-arrival{display:none!important}.filter-item:not([hidden]) .work-card,.dash-project-card:not([hidden]){animation:none!important}}
+
+
+/* V4 preference interoperability */
+html[data-minimal='on'][data-motion='full'] .cinema-reveal{transform:translateY(20px) scale(.992);filter:blur(0)}
+html[data-graffiti='off'] .street-graffiti{display:none!important}
+html[data-minimal='on'] .cinema-word-split .cinema-word-inner{transition-duration:.42s}
+html[data-minimal='on'] .site-transition span{letter-spacing:.16em}
